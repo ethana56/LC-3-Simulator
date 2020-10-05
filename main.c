@@ -81,6 +81,9 @@ static struct {
 
 static instru_func instru_func_vec[16];
 
+static int priv_mode_violation_toggle = 0;
+static int illegal_opcode_toggle      = 0;
+
 static void supervisor_stack_push(uint16_t data) {
    registers[r6] -= 1;
    write_memory(registers[r6], data);
@@ -264,7 +267,7 @@ static void not(uint16_t instruction) {
 
 static void rti(uint16_t instruction) {
    if (SUPERVISOR_BIT(psr)) {
-      /* TODO: EXCEPTION HERE */
+      priv_mode_violation_toggle = 1;
       return;
    }
    pc = supervisor_stack_pop();
@@ -342,9 +345,26 @@ static int num_interrupt_lines = 1;
 static exception_line exception_lines[2];
 static int num_exception_lines = 2;
 
-static void setup_interrupts(void) {
+static int priv_mode_violation_exception_line(uint8_t *vec_location) {
+   int toggle = priv_mode_violation_toggle;
+   priv_mode_violation_toggle = 0;
+   *vec_location = 0x00;
+   return toggle;
+}
+
+static int illegal_opcode_exception_line(uint8_t *vec_location) {
+   int toggle = illegal_opcode_toggle;
+   illegal_opcode_toggle = 0;
+   *vec_location = 0x01;
+   return toggle;
+}
+
+static void setup_interrupts_and_exceptions(void) {
    saved.ssp = SUPERVISOR_STACK_HIGH + 1;
    interrupt_lines[0] = keyboard_get_interrupt_line();
+
+   exception_lines[0] = priv_mode_violation_exception_line;
+   exception_lines[1] = illegal_opcode_exception_line;
 }
 
 static void execute_interrupt(uint8_t vec_location, uint8_t priority) {
@@ -380,25 +400,22 @@ static void execute_exception(uint8_t vec_location) {
    pc = read_memory(INTERRUPT_VECTOR_TABLE | vec_location);
 }
 
-static void check_exceptions(void) {
+static void check_interrupts_and_exceptions(void) {
    int i;
-   uint8_t vec_location;
+   uint8_t vec_location, priority;
    for (i = 0; i < num_exception_lines; ++i) {
       if (exception_lines[i](&vec_location)) {
          execute_exception(vec_location);
+         return;
       }
    }
-}
-
-static void check_interrupts(void) {
-   int i;
-   uint8_t vec_location, priority;
    for (i = 0; i < num_interrupt_lines; ++i) {
       if (interrupt_lines[i](&vec_location, &priority)) {
          if (PRIORITY_CMP(psr, priority)) {
             continue;
          }
          execute_interrupt(vec_location, priority);
+         return;
       }
    }
 }
@@ -412,7 +429,7 @@ void init_cpu(int argc, char **argv) {
    init_program(argc, argv);
    load_instructions();
    setup_io();
-   setup_interrupts();
+   setup_interrupts_and_exceptions();
 }
 
 int main(int argc, char *argv[]) {
@@ -423,17 +440,12 @@ int main(int argc, char *argv[]) {
       uint16_t instruction; 
       instruction = read_memory(pc++);
       opcode = OPCODE(instruction);
-      if (opcode == TRAP) {
-         break;
-      }
       if (opcode > 15 || opcode == 13) {
-         fprintf(stderr, "insvalid instruction exception\n");
-         exit(EXIT_FAILURE);
+         illegal_opcode_toggle = 1;
       }
       func = instru_func_vec[opcode];
       func(instruction);
-      check_exceptions();
-      check_interrupts();
+      check_interrupts_and_exceptions();
    }
 }
 
