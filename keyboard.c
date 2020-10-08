@@ -16,12 +16,13 @@
 
 #define INTERRUPT_BIT(status) (((status) >> 14) & 0x4000)
 #define READY_BIT(status) ((status) >> 15)
+#define SET_READY_BIT 0x8000
 
 static uint16_t read_kbsr(void);
 static uint16_t read_kbdr(void);
 static void write_kbsr(uint16_t);
 
-static uint16_t kbsr_internal;
+static uint16_t kbsr_internal = 0;
 static int interrupt_line_toggle = 0;
 
 static struct io_register kbsr_external = {
@@ -44,7 +45,7 @@ static uint16_t read_kbdr(void) {
     static uint16_t kbdr_internal;
     unsigned char byte;
     kbsr_internal &= NOT_READY;
-    if (read(STDIN_FILENO, &byte, 1) < 1) {
+    if (read(STDIN_FILENO, &byte, 1) < 0) {
         return kbdr_internal;
     }
     kbdr_internal = byte;
@@ -59,7 +60,7 @@ static uint16_t read_kbsr(void) {
     fd_set set;
     int result;
     struct timeval tv;
-    if (kbsr_internal >> 15) {
+    if (READY_BIT(kbsr_internal)) {
         return kbsr_internal;
     }
     memset(&tv, 0, sizeof(tv));
@@ -70,8 +71,8 @@ static uint16_t read_kbsr(void) {
         fprintf(stderr, "select error: %s\n", strerror(errno));
     }
     if (result > 0) {
-        kbsr_internal |= 0x8000;
-        if (!INTERRUPT_BIT(kbsr_internal)) {
+        kbsr_internal |= SET_READY_BIT;
+        if (INTERRUPT_BIT(kbsr_internal)) {
             interrupt_line_toggle = 1;
         }
     }

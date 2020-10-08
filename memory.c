@@ -56,29 +56,6 @@ uint16_t load_program(FILE *program_file, int *err) {
    return addr;
 }
 
-/*uint16_t load_program(FILE *program_file, int user) {
-   uint16_t addr;
-   size_t result;
-   if (read_convert_16bits(&addr, 1, program_file) == 0) {
-      if (ferror(program_file)) {
-         perror(NULL);
-      } else {
-         fprintf(stderr, "No program stored\n");
-      }
-      exit(EXIT_FAILURE);
-   }
-   if (user && (addr < LOW_PROG_ADDR || addr > HIGH_PROG_ADDR)) {
-      fprintf(stderr, "invalid starting address\n");
-      exit(EXIT_FAILURE);
-   }
-   result = read_convert_16bits(&mem[addr], HIGH_PROG_ADDR - addr, program_file);
-   if (result != HIGH_PROG_ADDR - addr && ferror(program_file)) {
-      perror(NULL);
-      exit(EXIT_FAILURE);
-   }
-   return addr;
-}*/
-
 void write_memory(uint16_t address, uint16_t value) {
    if (IS_IO(address)) {
       struct io_register *io_register = get_io_register(address);

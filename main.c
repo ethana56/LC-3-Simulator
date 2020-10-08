@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <limits.h>
+#include <time.h>
 #include "memory.h"
 #include "io.h"
 #include "keyboard.h"
@@ -54,6 +55,8 @@
 #define SET_PSR_N_MASK           0x0004
 #define INIT_PSR_MASK_USER       0x8072
 #define INIT_PSR_MASK_SUPERVISOR 0x0002
+
+#define CLOCK_ENABLED(value) (((value) & 0x8000))
 
 #define SUPERVISOR_BIT(psr) ((psr) >> 15)
 
@@ -165,6 +168,7 @@ static uint16_t sign_extend(uint16_t value, int num_bits) {
 
 static void set_condition_code(int reg) {
    int16_t val = registers[reg];
+   //printf("VAL: %d\n\r", val);
    psr &= NZP_PSR_CLEAR_MASK;
    if (val > 0) {
       psr |= SET_PSR_P_MASK;
@@ -196,6 +200,7 @@ static void br(uint16_t instruction) {
    uint16_t pc_offset;
    unsigned nzp_instru = NZP_INSTRU(instruction);
    unsigned nzp_psr    = NZP_PSR(psr);
+   //printf("Branhc\n");
    if (nzp_instru & nzp_psr) {
       pc_offset = sign_extend(PCOFFSET9(instruction), 9);
       pc += pc_offset;
@@ -435,7 +440,7 @@ void init_cpu(int argc, char **argv) {
 int main(int argc, char *argv[]) {
    instru_func func;
    init_cpu(argc, argv);
-   while (1) {
+   while (CLOCK_ENABLED(read_memory(0xFFFE))) {
       int opcode;
       uint16_t instruction; 
       instruction = read_memory(pc++);
