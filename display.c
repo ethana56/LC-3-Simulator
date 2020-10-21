@@ -10,30 +10,42 @@
 
 static uint16_t dsr_internal = 0x8000;
 
-static uint16_t read_dsr(void);
-static void write_ddr(uint16_t);
+static uint16_t read_dsr(struct io_register *);
+static void write_ddr(struct io_register *, uint16_t);
 
 static struct io_register dsr_external = {
+    .data = &dsr_internal,
     .address = DSR,
     .read = read_dsr,
     .write = NULL
 };
 
 static struct io_register ddr_external = {
+    .data = &dsr_internal,
     .address = DDR,
     .read = NULL,
     .write = write_ddr
 };
 
-static uint16_t read_dsr(void) {
+static struct io_register *display_io_registers[2] = {&dsr_external, &ddr_external};
+
+struct io_device display_device = {
+    .io_registers = display_io_registers,
+    .io_interrupt = NULL,
+    .num_io_registers = 2
+};
+
+static uint16_t read_dsr(struct io_register *dsr) {
     /* TODO: implement a timer to simulate output delay */
-    return dsr_internal;
+    uint16_t *data = dsr->data;
+    return *data;
 }
 
-static void write_ddr(uint16_t value) {
+static void write_ddr(struct io_register *ddr, uint16_t value) {
+    uint16_t *data = ddr->data;
     ssize_t result;
     unsigned char val;
-    if (!(dsr_internal >> 15)) {
+    if (!(*data >> 15)) {
         return;
     }
     memcpy(&val, &value, 1);
@@ -44,11 +56,13 @@ static void write_ddr(uint16_t value) {
     /* TODO: set dsr */
 }
 
-int display_get_registers(struct io_register **ddr, struct io_register **dsr) {
-    if (set_nonblock(STDOUT_FILENO) < 0) {
-        return -1;
+struct io_device *display_get_device(void) {
+    static int set_nonblock_bool = 0;
+    if (!set_nonblock_bool) {
+        if (set_nonblock(STDOUT_FILENO) < 0) {
+            return NULL;
+        }
+        set_nonblock_bool = 1;
     }
-    *ddr = &ddr_external;
-    *dsr = &dsr_external;
-    return 0;
+    return &display_device;
 }

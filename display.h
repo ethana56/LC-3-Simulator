@@ -2,7 +2,6 @@
 #define DISPLAY_H
 
 #include "io.h"
-
-int display_get_registers(struct io_register **, struct io_register **);
+struct io_device *display_get_device(void);
 
 #endif

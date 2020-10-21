@@ -17,11 +17,7 @@ int init_terminal(void) {
       return -1;
    }
    saved_termios = buf;
-   buf.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-   buf.c_iflag &= ~(BRKINT | INPCK | ISTRIP | IXON);
-   buf.c_cflag &= ~(CSIZE | PARENB);
-   buf.c_cflag |= CS8;
-   buf.c_oflag &= ~(OPOST);
+   buf.c_lflag &= ~(ECHO | ICANON );
 
    buf.c_cc[VMIN] = 1;
    buf.c_cc[VTIME] = 0;
@@ -34,10 +30,8 @@ int init_terminal(void) {
       errno = err;
       return -1;
    }
-   if ((buf.c_lflag & (ECHO | ICANON | IEXTEN | ISIG)) ||
-       (buf.c_iflag & (BRKINT | INPCK | ISTRIP | IXON)) ||
-       (buf.c_cflag & (CSIZE | PARENB | CS8)) != CS8 ||
-       (buf.c_oflag & OPOST) || buf.c_cc[VMIN] != 1 ||
+   if ((buf.c_lflag & (ECHO | ICANON)) ||
+       buf.c_cc[VMIN] != 1 ||
        buf.c_cc[VTIME] != 0) {
       
       tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_termios);

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "util.h"
 #include "io.h"
+#include "memory.h"
 
 #define IO_START_ADDRESS     0xFE00
 
@@ -15,30 +16,31 @@
 #define LOW_PROG_ADDR  0x3000
 #define HIGH_PROG_ADDR 0xFDFF
 
+struct Memory {
+   uint16_t data[NUM_ADDRESSES];
+   struct io_register *mem_mapped_io[MEM_MAPPED_ADDRESSES];
+};
 
-static uint16_t mem[NUM_ADDRESSES];
-static struct io_register *mem_mapped_io[MEM_MAPPED_ADDRESSES];
-
-static struct io_register *get_io_register(uint16_t address) {
-   return mem_mapped_io[IO_ADDRESS(address)];
+static struct io_register *get_io_register(Memory *memory, uint16_t address) {
+   return memory->mem_mapped_io[IO_ADDRESS(address)];
 }
 
-uint16_t read_memory(uint16_t address) {
+uint16_t read_memory(Memory *memory, uint16_t address) {
    uint16_t result;
    if (IS_IO(address)) {
-      struct io_register *io_register = get_io_register(address);
+      struct io_register *io_register = get_io_register(memory, address);
       if (io_register == NULL || io_register->read == NULL) { 
          result = 0x0000;
       } else {
-         result = io_register->read();
+         result = io_register->read(io_register);
       }
    } else {
-      result = mem[address];
+      result = memory->data[address];
    }
    return result;
 }
 
-uint16_t load_program(FILE *program_file, int *err) {
+uint16_t load_program(Memory *memory, FILE *program_file, int *err) {
    uint16_t addr;
    size_t result;
    *err = 0;
@@ -48,7 +50,7 @@ uint16_t load_program(FILE *program_file, int *err) {
          return 0;
       }
    }
-   result = read_convert_16bits(&mem[addr], HIGH_PROG_ADDR - addr, program_file);
+   result = read_convert_16bits(&memory->data[addr], HIGH_PROG_ADDR - addr, program_file);
    if (result != HIGH_PROG_ADDR - addr && ferror(program_file)) {
       *err = 1;
       return 0;
@@ -56,25 +58,33 @@ uint16_t load_program(FILE *program_file, int *err) {
    return addr;
 }
 
-void write_memory(uint16_t address, uint16_t value) {
+void write_memory(Memory *memory, uint16_t address, uint16_t value) {
    if (IS_IO(address)) {
-      struct io_register *io_register = get_io_register(address);
+      struct io_register *io_register = get_io_register(memory, address);
       if (io_register == NULL || io_register ->write == NULL) {
          return;
       }
-      io_register->write(value);
+      io_register->write(io_register, value);
    } else {
-      mem[address] = value;
+      memory->data[address] = value;
    }
 }
 
-void memory_register_io_registers(struct io_register **io_registers, int amt) {
+void memory_register_io_registers(Memory *memory, struct io_register **io_registers, int amt) {
    while (amt--) {
       if (!IS_IN_RANGE((*io_registers)->address)) {
          fprintf(stderr, "device address out of range.\n");
       } else {
-         mem_mapped_io[IO_ADDRESS((*io_registers)->address)] = *io_registers;
+         memory->mem_mapped_io[IO_ADDRESS((*io_registers)->address)] = *io_registers;
       }
       ++io_registers;
    }
+}
+
+ Memory *new_Memory(void) {
+    Memory *memory = malloc(sizeof(struct Memory));
+    if (memory == NULL) {
+      return NULL;
+   }
+   return memory;
 }
