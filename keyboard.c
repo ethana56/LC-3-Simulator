@@ -120,7 +120,7 @@ static uint16_t read_kbsr(struct io_register *kbsr_io_register) {
 static int read_interrupt_line(struct io_interrupt_line *kb_interrupt_line) {
     int ret = 0;
     struct kb_data *data = kb_interrupt_line->data;
-    read_kbsr_internal(data);
+    //read_kbsr_internal(data);
     if (data->interrupt_line_toggle) {
         ret = 1;
     }
