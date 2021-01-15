@@ -1,0 +1,7 @@
+.ORIG x3000
+    LEA R0, PROMPT
+    PUTS
+    HALT
+NEWLINE .FILL 10
+PROMPT .STRINGZ	"Hello, World\n"
+.END

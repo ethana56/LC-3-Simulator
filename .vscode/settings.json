@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.def": "c",
+        "memory": "c",
+        "unistd.h": "c"
+    }
+}
