@@ -40,12 +40,12 @@ static int init_plugin(struct device_plugin *plugin, const char *path, char *err
     init_device_plugin = dlsym(plugin->data, "init_device_plugin");
     if (init_device_plugin == NULL) {
         dl_error_string = dlerror();
-	    if (dl_error_string == NULL) {
+        if (dl_error_string == NULL) {
             create_func_null_error_string(error_string, path);       		
-	    } else {
+        } else {
 	        cpy_error_string(error_string, dl_error_string);
-	    }
-	    return -1;
+        }
+        return -1;
     }
     if ((*init_device_plugin)(plugin) < 0) {
 	    cpy_error_string(error_string, strerror(errno));
@@ -114,21 +114,21 @@ struct device_plugin **pm_load_device_plugins(const char *dir_path, size_t *num_
         struct device_plugin *plugin;
         char path[PATH_MAX + 1];
         struct stat file_stat;
-	    if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
+        if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
             continue;
-	    }
-	    if (!build_path(path, dir_path, dp->d_name, sizeof(path))) {
+        }
+        if (!build_path(path, dir_path, dp->d_name, sizeof(path))) {
             continue;
-	    }
-	    if (stat(path, &file_stat) < 0) {
+        }
+        if (stat(path, &file_stat) < 0) {
             goto err_str;
-	    }
-	    if (S_ISDIR(file_stat.st_mode)) {
+        }
+        if (S_ISDIR(file_stat.st_mode)) {
             continue;
-	    }
+        }
         if (add_device_plugin(device_plugins, path, error_string) < 0) {	
             goto err;
-	    }
+        }
     }
     if (errno != 0) {
         goto err_str;
