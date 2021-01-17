@@ -63,18 +63,18 @@ static int add_device_plugin(List *device_plugins, const char *path, char *error
     }
     plugin->data = dlopen(path, RTLD_NOW);
     if (plugin->data == NULL) { 
-	    cpy_error_string(error_string, dlerror());    
-	    free(plugin);
-	    return -1;
+        cpy_error_string(error_string, dlerror());    
+        free(plugin);
+        return -1;
     }
     if (init_plugin(plugin, path, error_string) < 0) {    
         return -1;
     }
     if (list_add(device_plugins, plugin) < 0) {
-	    cpy_error_string(error_string, strerror(errno));    
+        cpy_error_string(error_string, strerror(errno));    
         plugin->cleanup();
-	    free(plugin);
-	    return -1;
+        free(plugin);
+        return -1;
     }
     return 0;
 }
@@ -90,8 +90,8 @@ static void device_plugins_list_free(List *device_plugins) {
     num_plugins = list_size(device_plugins);
     for (i = 0; i < num_plugins; ++i) {
         struct device_plugin *plugin;
-	    plugin = list_get(device_plugins, i);
-	    pm_free_plugin(plugin);
+        plugin = list_get(device_plugins, i);
+        pm_free_plugin(plugin);
     }
     list_free(device_plugins);
 }
@@ -111,9 +111,9 @@ struct device_plugin **pm_load_device_plugins(const char *dir_path, size_t *num_
     }
     errno = 0;
     while ((dp = readdir(dir)) != NULL) {
-	    struct device_plugin *plugin;
+        struct device_plugin *plugin;
         char path[PATH_MAX + 1];
-	    struct stat file_stat;
+        struct stat file_stat;
 	    if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
             continue;
 	    }
