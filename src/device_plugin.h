@@ -22,7 +22,7 @@ struct device_plugin {
     size_t num_readable_writeable;
     uint16_t (*read_register)(uint16_t);
     void (*write_register)(uint16_t, uint16_t);
-    void (*start)(struct host);
+    void (*start)(struct host *);
     void (*cleanup)(void);
 };
 

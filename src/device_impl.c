@@ -17,6 +17,7 @@
 static char *last_error_string = NULL;
 
 struct device_data {
+    struct host *host_interface;
     struct device_plugin *plugin;
     Dvel *dvel;
 };
@@ -86,9 +87,11 @@ static uint16_t device_read_register(struct device *device, uint16_t address) {
     struct device_data *data;
     uint16_t value;
     data = device->data;
+    //printf("About to lock\n");
     dvel_lock(data->dvel);
     value = data->plugin->read_register(address);
     dvel_unlock(data->dvel);
+    //printf("unlocking\n");
     return value;
 }
 
@@ -108,8 +111,8 @@ void close(struct host *host_interface) {
 
 }
 
-static void init_host_interface(struct host *host_interface, struct device *device) {
-    host_interface->data = device;
+static void init_host_interface(struct host *host_interface, struct device_data *dev_data) {
+    host_interface->data = dev_data;
     host_interface->get_keyboard_in_fd = get_keyboard_in_fd;
     host_interface->get_display_out_fd = get_display_out_fd;
     host_interface->add_listener_read = host_add_listener_read;
@@ -137,9 +140,16 @@ static struct device_data *create_dev_data(struct device_plugin *plugin) {
     if (dev_data == NULL) {
         return NULL;
     }
+    dev_data->host_interface = malloc(sizeof(struct host));
+    if (dev_data->host_interface == NULL) {
+        free(dev_data);
+        return NULL;
+    }
+    init_host_interface(dev_data->host_interface, dev_data);
     dev_data->plugin = plugin;
     dev_data->dvel = dvel_new();
     if (dev_data->dvel == NULL) {
+        free(dev_data->host_interface);
         free(dev_data);
         return NULL;
     }
@@ -147,7 +157,6 @@ static struct device_data *create_dev_data(struct device_plugin *plugin) {
 }
 
 struct device *create_device_impl(struct device_plugin *plugin) {
-    struct host host_interface;
     struct device_data *dev_data;
     struct device *device;
     device = malloc(sizeof(struct device));
@@ -160,8 +169,7 @@ struct device *create_device_impl(struct device_plugin *plugin) {
         return NULL;
     }
     init_device(device, dev_data);
-    init_host_interface(&host_interface, device);
-    dev_data->plugin->start(host_interface);
+    dev_data->plugin->start(dev_data->host_interface);
     return device;
 }
 

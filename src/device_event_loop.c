@@ -48,9 +48,9 @@ static void *l_run(void *arg) {
 static void dvel_enqueue(Dvel *dvel, struct dvel_watcher *watcher) {
     if (dvel->watcher_queue_head == NULL && dvel->watcher_queue_tail == NULL) {
         dvel->watcher_queue_head = watcher;
-	dvel->watcher_queue_tail = watcher;
-	watcher->next = NULL;
-	return;
+	    dvel->watcher_queue_tail = watcher;
+	    watcher->next = NULL;
+	    return;
     }
     dvel->watcher_queue_tail->next = watcher;
     dvel->watcher_queue_tail = watcher;
@@ -75,7 +75,7 @@ static void async_callback(EV_P_ ev_async *async_watcher, int revents) {
     struct dvel_watcher *cur_watcher;
     if (revents & EV_ERROR) {
         safe_write(STDERR_FILENO, revents_err_msg, sizeof(revents_err_msg) - 1);
-	abort();
+	    abort();
     }
     dvel = async_watcher->data;
     pthread_mutex_lock(&dvel->queue_lock);
@@ -91,7 +91,7 @@ static void dvel_io_callback(EV_P_ ev_io *watcher, int revents) {
     dvel_watcher = (struct dvel_watcher *)watcher;
     if (revents & EV_ERROR) {
         safe_write(STDERR_FILENO, revents_err_msg, sizeof(revents_err_msg) - 1);
-	abort();
+	    abort();
     } 
     dvel = ev_userdata(EV_A);
     pthread_mutex_lock(&dvel->callback_lock);
@@ -120,6 +120,7 @@ int dvel_add_listener_read(Dvel *dvel, int fd, void (*callback)(int, void *), vo
     ev_init(ev_io_watcher, dvel_io_callback);
     ev_io_set(ev_io_watcher, fd, EV_READ);
     /* TODO CHECK DICTIONARY */
+    /* setting caller data */
     watcher->data = data;
     watcher->callback = callback;
     pthread_mutex_lock(&dvel->queue_lock);
@@ -138,7 +139,7 @@ Dvel *dvel_new(void) {
     struct ev_loop *loop;
     dvel = malloc(sizeof(Dvel));
     if (dvel == NULL) {
-        return NULL;
+        goto dvel_alloc_err;
     }
     loop = ev_loop_new(EVFLAG_AUTO);
     if (!loop) {
@@ -146,21 +147,34 @@ Dvel *dvel_new(void) {
     }
     dvel->loop = loop;
     if (pthread_mutex_init(&dvel->queue_lock, NULL) < 0) {
-        goto lock_init_err;
-    } 
-    if (pthread_mutex_init(&dvel->callback_lock, NULL) < 0) {
-        goto lock_init_err2;
+        goto queue_lock_init_err;
     }
+    if (pthread_mutex_init(&dvel->callback_lock, NULL) < 0) {
+        goto callback_lock_init_err;
+    }
+    ev_set_userdata(EV_A_ dvel);
+    dvel->watcher_queue_head = NULL;
+    dvel->watcher_queue_tail = NULL;
+
     ev_async_init(&dvel->async_w, async_callback);
     dvel->async_w.data = dvel;
     ev_async_start(EV_A_ &dvel->async_w);
+    if (pthread_create(&dvel->thread, NULL, l_run, EV_A) < 0) {
+        goto thread_create_err;
+    }
     return dvel;
-wait_for_thread_start_err:    
-pthread_create_err: /* TODO: implement freeing */  
-lock_init_err2:
-lock_init_err:
-loop_init_err:    
-    return NULL;    
+
+thread_create_err:
+    ev_async_stop(EV_A_ &dvel->async_w);
+    pthread_mutex_destroy(&dvel->callback_lock);
+callback_lock_init_err:
+    pthread_mutex_destroy(&dvel->queue_lock);
+queue_lock_init_err:
+    ev_loop_destroy(EV_A);
+loop_init_err:
+    free(dvel);
+dvel_alloc_err:
+    return NULL;     
 }
 
 

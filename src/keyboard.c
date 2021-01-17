@@ -22,7 +22,7 @@ static uint16_t keyboard_reg_readable_writeable[] = {KBSR};
 static uint16_t kbsr = 0;
 static uint16_t kbdr = 0;
 
-static struct host keyboard_host_interface;
+static struct host *keyboard_host_interface;
 
 static int keyboard_in_fd;
 
@@ -36,7 +36,7 @@ static void keyboard_write_register(uint16_t address, uint16_t value) {
 }
 
 static uint16_t keyboard_read_register(uint16_t address) {
-    uint16_t result;	
+    uint16_t result;
     switch (address) {
     case KBSR:
 	    result = kbsr;
@@ -60,14 +60,14 @@ static void keyboard_update(int fd, void *data) {
         return;
     }
     if (amt_read < 0) {
-        keyboard_host_interface.log_error(&keyboard_host_interface, strerror(errno));
-	keyboard_host_interface.close(&keyboard_host_interface);
-	return;
+        keyboard_host_interface->log_error(keyboard_host_interface, strerror(errno));
+	    keyboard_host_interface->close(keyboard_host_interface);
+	    return;
     }
     /* Make sure last data has been read */
     if (kbsr == 0) {
         kbdr = input;
-	kbsr |= READY_BIT_SET_ON;
+	    kbsr |= READY_BIT_SET_ON;
     }
 }
 
@@ -75,17 +75,16 @@ static void keyboard_cleanup(void) {
     /* RETURN KEYBOARD_IN_FD */
 }
 
-static void keyboard_start(struct host host_interface) {
+static void keyboard_start(struct host *host_interface) {
     int keyboard_in_fd;
-    keyboard_in_fd = host_interface.get_keyboard_in_fd(&host_interface);
-    if (keyboard_in_fd < 0) {
-        host_interface.log_error(&host_interface, "Keyboard plugin cannot get in fd");
-	host_interface.close(&host_interface);
-	return;
-    }
-    host_interface.add_listener_read(&host_interface, keyboard_in_fd, keyboard_update, NULL);
     keyboard_host_interface = host_interface;
-    //printf("IN KEYBOARD\n");
+    keyboard_in_fd = host_interface->get_keyboard_in_fd(host_interface);
+    if (keyboard_in_fd < 0) {
+        host_interface->log_error(host_interface, "Keyboard plugin cannot get in fd");
+        host_interface->close(host_interface);
+        return;
+    }
+    host_interface->add_listener_read(host_interface, keyboard_in_fd, keyboard_update, NULL);
 }
 
 int init_device_plugin(struct device_plugin *plugin) {

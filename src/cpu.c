@@ -295,24 +295,24 @@ static void load_instructions(void) {
 }*/
 
 static void io_register_write(struct io_register *io_register, uint16_t value) {
-    struct device *device;
-    device = io_register->data;
-    device->write_register(device, io_register->address, value);
+   struct device *device;
+   device = io_register->data;
+   device->write_register(device, io_register->address, value);
 }
 
 static uint16_t io_register_read(struct io_register *io_register) {
-    struct device *device;
-    device = io_register->data;
-    return device->read_register(device, io_register->address);
+   struct device *device;
+   device = io_register->data;
+   return device->read_register(device, io_register->address);
 }
 
 static size_t count_device_registers(struct device **devices, size_t num_devices) {
     size_t num_registers;
     size_t i;
     for (i = 0, num_registers = 0; i < num_devices; ++i) {
-        num_registers += devices[i]->num_readable;
-	num_registers += devices[i]->num_writeable;
-	num_registers += devices[i]->num_readable_writeable;
+      num_registers += devices[i]->num_readable;
+	   num_registers += devices[i]->num_writeable;
+	   num_registers += devices[i]->num_readable_writeable;
     }
     return num_registers;
 } 
@@ -320,36 +320,36 @@ static size_t count_device_registers(struct device **devices, size_t num_devices
 static size_t device_build_io_registers(struct io_register *io_registers, struct device *device) {
     size_t i, io_reg_index = 0;
     for (i = 0; i < device->num_readable; ++i) {
-        io_registers[io_reg_index].data = device;
-	io_registers[io_reg_index].address = device->readable[i];
-	io_registers[io_reg_index].read = io_register_read;
-	io_registers[io_reg_index].write = NULL;
-	++io_reg_index;
+      io_registers[io_reg_index].data = device;
+	   io_registers[io_reg_index].address = device->readable[i];
+	   io_registers[io_reg_index].read = io_register_read;
+	   io_registers[io_reg_index].write = NULL;
+	   ++io_reg_index;
     }
     for (i = 0; i < device->num_writeable; ++i) {
-        io_registers[io_reg_index].data = device;
-	io_registers[io_reg_index].address = device->writeable[i];
-	io_registers[io_reg_index].read = NULL;
-	io_registers[io_reg_index].write = io_register_write;
-	++io_reg_index;
+      io_registers[io_reg_index].data = device;
+	   io_registers[io_reg_index].address = device->writeable[i];
+	   io_registers[io_reg_index].read = NULL;
+	   io_registers[io_reg_index].write = io_register_write;
+	   ++io_reg_index;
     }
     for (i = 0; i < device->num_readable_writeable; ++i) {
-        io_registers[io_reg_index].data = device;
-	io_registers[io_reg_index].address = device->readable_writeable[i];
-	io_registers[io_reg_index].read = io_register_read;
-	io_registers[io_reg_index].write = io_register_write;
-	++io_reg_index;
+      io_registers[io_reg_index].data = device;
+	   io_registers[io_reg_index].address = device->readable_writeable[i];
+	   io_registers[io_reg_index].read = io_register_read;
+	   io_registers[io_reg_index].write = io_register_write;
+	   ++io_reg_index;
     }
-    return io_reg_index;
+   return io_reg_index;
 }
 
 static void build_io_registers(struct io_register *io_registers, struct device **devices, size_t num_devices) {
     size_t io_reg_index, i;
     for (i = 0, io_reg_index = 0; i < num_devices; ++i) {
-        size_t cur_device_num_reg;
-	cur_device_num_reg = device_build_io_registers(io_registers + io_reg_index, devices[i]);
-	io_reg_index += cur_device_num_reg;
-    }
+      size_t cur_device_num_reg;
+	   cur_device_num_reg = device_build_io_registers(io_registers + io_reg_index, devices[i]);
+	   io_reg_index += cur_device_num_reg;
+   }
 }
 
 int cpu_attach_devices(Cpu *cpu, struct device **devices, size_t num_devices) {
@@ -362,7 +362,7 @@ int cpu_attach_devices(Cpu *cpu, struct device **devices, size_t num_devices) {
     }
     build_io_registers(cpu->io_registers, devices, num_devices);
     for (i = 0; i < num_io_registers; ++i) {
-        memory_register_io_register(cpu->memory, cpu->io_registers + i);
+      memory_register_io_register(cpu->memory, cpu->io_registers + i);
     }
     return 0;
 }
@@ -460,16 +460,17 @@ void cpu_write_memory(Cpu *cpu, uint16_t address, uint16_t value) {
 }
 
 void cpu_load_program(Cpu *cpu, const uint16_t *program, size_t amt) {
-    size_t i;
-    uint16_t cur_addr, max_addr;
-    if (amt == 1) {
-        return;
-    }
-    max_addr = MAX_PROGRAM_LEN - 1;
-    cur_addr = program[0];
-    for (i = 1; i < amt && cur_addr <= max_addr; ++i, ++cur_addr) {
-        write_memory(cpu->memory, cur_addr, program[i]);
-    }
+   size_t i;
+   uint16_t cur_addr, max_addr;
+   if (amt == 1) {
+      return;
+   }
+   max_addr = MAX_PROGRAM_LEN - 1;
+   cur_addr = program[0];
+   cpu->pc = cur_addr;
+   for (i = 1; i < amt && cur_addr <= max_addr; ++i, ++cur_addr) {
+      write_memory(cpu->memory, cur_addr, program[i]);
+   }
 }
 
 Cpu *new_Cpu(struct interrupt_controller *interrupt_controller) {
