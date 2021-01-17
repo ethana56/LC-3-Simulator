@@ -67,7 +67,7 @@ static void keyboard_update(int fd, void *data) {
     /* Make sure last data has been read */
     if (kbsr == 0) {
         kbdr = input;
-	    kbsr |= READY_BIT_SET_ON;
+        kbsr |= READY_BIT_SET_ON;
     }
 }
 
