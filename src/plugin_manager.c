@@ -9,8 +9,11 @@
 #include <dlfcn.h>
 
 #include "list.h"
-#include "device_plugin.h"
 #include "plugin_manager.h"
+#include "device_plugin.h"
+#include "simulator.h"
+
+#define PATH_BUFSIZ BUFSIZ
 
 static void create_func_null_error_string(char *error_string, const char *path) {
     static char func_not_found_error_str[] = "init_device_plugin is null in:";	
@@ -34,90 +37,111 @@ static int build_path(char *dst, const char *directory_str, const char *file_nam
     return 1;
 }
 
-static int init_plugin(struct device_plugin *plugin, const char *path, char *error_string) {
-    int (*init_device_plugin)(struct device_plugin *);
+static int check_extension(const char *path, const char *extension) {
+    char *path_ext;
+    path_ext = strrchr(path, '.');
+    if (path_ext == NULL) {
+        return 0;
+    }
+    path_ext += 1;
+    return strcmp(path_ext, extension) == 0;
+}
+
+static struct device_plugin *init_plugin(void *dlhandle, struct host *host, const char *path, char *error_string) {
+    struct device_plugin *(*init_device_plugin)(struct host *) = NULL;
+    struct device_plugin *plugin;
     char *dl_error_string;
-    init_device_plugin = dlsym(plugin->data, "init_device_plugin");
+    init_device_plugin = dlsym(dlhandle, "init_device_plugin");
     if (init_device_plugin == NULL) {
         dl_error_string = dlerror();
         if (dl_error_string == NULL) {
-            create_func_null_error_string(error_string, path);       		
+            create_func_null_error_string(error_string, dl_error_string);
         } else {
-	        cpy_error_string(error_string, dl_error_string);
+            cpy_error_string(error_string, dl_error_string);
         }
-        return -1;
+        return NULL;
     }
-    if ((*init_device_plugin)(plugin) < 0) {
-	    cpy_error_string(error_string, strerror(errno));
-        return -1;
-    }
-    return 0;
-}
-
-static int add_device_plugin(List *device_plugins, const char *path, char *error_string) {
-    struct device_plugin *plugin;
-    plugin = malloc(sizeof(struct device_plugin));
+    plugin = init_device_plugin(host);
     if (plugin == NULL) {
-	cpy_error_string(error_string, strerror(errno));    
+        cpy_error_string(error_string, strerror(errno));
+        return NULL;
+    }
+    return plugin;
+}
+
+static int load_device_plugin(const char *path, struct device_plugin_data *device_plugin, struct host *host, char *error_string) {
+    device_plugin->dlhandle = dlopen(path, RTLD_NOW);
+    if (device_plugin->dlhandle == NULL) {
+        cpy_error_string(error_string, dlerror());
         return -1;
     }
-    plugin->data = dlopen(path, RTLD_NOW);
-    if (plugin->data == NULL) { 
-        cpy_error_string(error_string, dlerror());    
-        free(plugin);
-        return -1;
-    }
-    if (init_plugin(plugin, path, error_string) < 0) {    
-        return -1;
-    }
-    if (list_add(device_plugins, plugin) < 0) {
-        cpy_error_string(error_string, strerror(errno));    
-        plugin->cleanup();
-        free(plugin);
+    device_plugin->plugin = init_plugin(device_plugin->dlhandle, host, path, error_string);
+    if (device_plugin->plugin == NULL) {
+        dlclose(device_plugin->dlhandle);
         return -1;
     }
     return 0;
 }
 
-void pm_free_plugin(struct device_plugin *plugin) {
-    plugin->cleanup();
-    dlclose(plugin->data); 
-    free(plugin);
-}
-
-static void device_plugins_list_free(List *device_plugins) {
-    size_t num_plugins, i;
-    num_plugins = list_size(device_plugins);
-    for (i = 0; i < num_plugins; ++i) {
-        struct device_plugin *plugin;
-        plugin = list_get(device_plugins, i);
-        pm_free_plugin(plugin);
+static int add_device_plugin(List *device_plugins, struct host *host, const char *path, char *error_string) {
+    struct device_plugin_data *device_plugin;
+    device_plugin = malloc(sizeof(struct device_plugin_data));
+    if (device_plugin == NULL) {
+        cpy_error_string(error_string, strerror(errno));
+        goto plugin_alloc_err;
     }
-    list_free(device_plugins);
+    if (load_device_plugin(path, device_plugin, host, error_string) < 0) {
+        goto load_device_plugin_err;
+    }
+    if (list_add(device_plugins, device_plugin) < 0) {
+        cpy_error_string(error_string, strerror(errno));
+        goto list_add_err;
+    }
+    return 0;
+
+list_add_err:
+    device_plugin->plugin->free(device_plugin->plugin);
+    dlclose(device_plugin->dlhandle);
+load_device_plugin_err:
+    free(device_plugin);
+plugin_alloc_err:
+    return -1;    
 }
 
-struct device_plugin **pm_load_device_plugins(const char *dir_path, size_t *num_plugins, char *error_string) {
-    List *device_plugins = NULL;
+static void plugin_list_free(List *plugins) {
+    size_t num_plugins, i;
+    num_plugins = list_size(plugins);
+    for (i = 0; i < num_plugins; ++i) {
+        struct device_plugin_data *cur_plugin;
+        cur_plugin = list_get(plugins, i);
+        cur_plugin->plugin->free(cur_plugin->plugin);
+    }
+    list_free(plugins);
+}
+
+struct device_plugin_data **pm_load_device_plugins(const char *dir_path, const char *extension, size_t *num_plugins, struct host *host, char *error_string) {
+    List *devices = NULL;
     DIR *dir;
     struct dirent *dp;
-    int readdir_error = 0;
     dir = opendir(dir_path);
     if (dir == NULL) {
         goto err_str;
     }
-    device_plugins = new_List(2, 1.0);
-    if (device_plugins == NULL) {
+    devices = new_List(2, 1.0);
+    if (devices == NULL) {
         goto err_str;
     }
     errno = 0;
     while ((dp = readdir(dir)) != NULL) {
-        struct device_plugin *plugin;
-        char path[PATH_MAX + 1];
+        char path[PATH_BUFSIZ];
         struct stat file_stat;
         if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
             continue;
         }
         if (!build_path(path, dir_path, dp->d_name, sizeof(path))) {
+            continue;
+        }
+        if (!check_extension(path, extension)) {
             continue;
         }
         if (stat(path, &file_stat) < 0) {
@@ -126,7 +150,7 @@ struct device_plugin **pm_load_device_plugins(const char *dir_path, size_t *num_
         if (S_ISDIR(file_stat.st_mode)) {
             continue;
         }
-        if (add_device_plugin(device_plugins, path, error_string) < 0) {	
+        if (add_device_plugin(devices, host, path, error_string) < 0) {	
             goto err;
         }
     }
@@ -134,12 +158,22 @@ struct device_plugin **pm_load_device_plugins(const char *dir_path, size_t *num_
         goto err_str;
     }
     closedir(dir);
-    return (struct device_plugin **)list_free_and_return_as_array(device_plugins, num_plugins);
+    return (struct device_plugin_data **)list_free_and_return_as_array(devices, num_plugins);
 
 err_str:
     cpy_error_string(error_string, strerror(errno));
 err:
-    if (device_plugins != NULL) device_plugins_list_free(device_plugins);
+    if (devices != NULL) plugin_list_free(devices);
     if (dir != NULL) closedir(dir);    
     return NULL;
+}
+
+void pm_plugins_free(struct device_plugin_data **plugins, size_t num_plugins) {
+    size_t i;
+    for (i = 0; i < num_plugins; ++i) {
+        plugins[i]->plugin->free(plugins[i]->plugin);
+        dlclose(plugins[i]->dlhandle);
+        free(plugins[i]);
+    }
+    free(plugins);
 }

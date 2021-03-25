@@ -13,7 +13,6 @@
 #include <time.h>
 
 #include "cpu.h"
-#include "memory.h"
 
 #define ADD      0x1
 #define AND      0x5
@@ -63,7 +62,8 @@
 #define IS_IMM5(instruction) (((instruction) >> 5) & 0x0001)
 #define IS_JSR(instruction)  (((instruction) >> 11) & 0x0001)
 
-#define PRIORITY_CMP(psr, priority) ((0x0007 & ((psr) >> 7)) > priority)
+#define PRIORITY_CMP(psr, priority) ((0x0007 & ((psr) >> 8)) > priority)
+#define PSR_PRIORITY(psr) (0x0007 & ((psr) >> 8))
 
 #define PRIV_MODE_VIOLATION_EXCEPTION_VECTOR 0x00
 #define ILLEGAL_OPCODE_EXCEPTION_VECTOR      0x01
@@ -78,16 +78,13 @@ struct cpu_exception {
    uint8_t vec_location;
 };
 
-struct Cpu {
-   Memory *memory;
-   struct io_register *io_registers;
-   struct mcr {
-       struct io_register mcr_register;
-       uint16_t mcr_data;
-   } mcr;
+struct cpu {
+   struct bus_accessor *bus_access;
+   struct interrupt_checker *inter_check;
+   void (*on_tick)(void *);
+   void *on_tick_data;
    struct cpu_exception priv_mode_violation_exception_line;
    struct cpu_exception illegal_opcode_exception_line;
-   struct interrupt_controller *interrupt_controller;
    uint16_t registers[num_registers];
    uint16_t pc;
    uint16_t psr;
@@ -96,6 +93,25 @@ struct Cpu {
       uint16_t ssp;
    } saved;
 };
+
+/*struct Cpu {
+   Memory *memory;
+   struct io_register *io_registers;
+   struct mcr {
+       struct io_register mcr_register;
+       uint16_t mcr_data;
+   } mcr;
+   struct interrupt_checker *inter_check;
+   struct cpu_exception priv_mode_violation_exception_line;
+   struct cpu_exception illegal_opcode_exception_line;
+   uint16_t registers[num_registers];
+   uint16_t pc;
+   uint16_t psr;
+   struct {
+      uint16_t usp;
+      uint16_t ssp;
+   } saved;
+};*/
 
 static instru_func instru_func_vec[16];
 static int instructions_loaded = 0;
@@ -109,11 +125,12 @@ static void setup_exceptions(Cpu *cpu) {
 
 static void supervisor_stack_push(Cpu *cpu, uint16_t data) {
    cpu->registers[r6] -= 1;
-   write_memory(cpu->memory, cpu->registers[r6], data);
+   cpu->bus_access->write(cpu->bus_access, cpu->registers[r6], data);
 }
 
 static uint16_t supervisor_stack_pop(Cpu *cpu) {
-   uint16_t data = read_memory(cpu->memory, cpu->registers[r6]);
+   uint16_t data;
+   data = cpu->bus_access->read(cpu->bus_access, cpu->registers[r6]);
    cpu->registers[r6] += 1;
    return data;
 }
@@ -187,8 +204,9 @@ static uint16_t compute_direct_address(Cpu *cpu, uint16_t instruction) {
 }
 
 static uint16_t compute_indirect_address(Cpu *cpu, uint16_t instruction) {
-   uint16_t pc_offset = sign_extend(PCOFFSET9(instruction), 9);
-   return read_memory(cpu->memory, cpu->pc + pc_offset);
+   uint16_t pc_offset;
+   pc_offset = sign_extend(PCOFFSET9(instruction), 9);
+   return cpu->bus_access->read(cpu->bus_access, cpu->pc + pc_offset);
 }
 
 static uint16_t compute_base_plus_offset(Cpu *cpu, uint16_t instruction) {
@@ -197,23 +215,25 @@ static uint16_t compute_base_plus_offset(Cpu *cpu, uint16_t instruction) {
 }
 
 static void ld(Cpu *cpu, uint16_t instruction) {
-   int dr = REG1_INSTRU(instruction);
-   uint16_t addr = compute_direct_address(cpu, instruction);
-   cpu->registers[dr] = read_memory(cpu->memory, addr);
+   int dr;
+   uint16_t addr;
+   dr = REG1_INSTRU(instruction);
+   addr = compute_direct_address(cpu, instruction);
+   cpu->registers[dr] = cpu->bus_access->read(cpu->bus_access, addr);
    set_condition_code(cpu, dr);
 }
 
 static void ldi(Cpu *cpu, uint16_t instruction) {
    uint16_t addr = compute_indirect_address(cpu, instruction);
    int dr = REG1_INSTRU(instruction);
-   cpu->registers[dr] = read_memory(cpu->memory, addr);
+   cpu->registers[dr] = cpu->bus_access->read(cpu->bus_access, addr);
    set_condition_code(cpu,dr);
 }
 
 static void ldr(Cpu *cpu, uint16_t instruction) {
    uint16_t addr = compute_base_plus_offset(cpu, instruction);
    int dr = REG1_INSTRU(instruction);
-   cpu->registers[dr] = read_memory(cpu->memory, addr);
+   cpu->registers[dr] = cpu->bus_access->read(cpu->bus_access, addr);
    set_condition_code(cpu, dr);
 }
 
@@ -245,19 +265,19 @@ static void rti(Cpu *cpu, uint16_t instruction) {
 static void st(Cpu *cpu, uint16_t instruction) {
    int sr = REG1_INSTRU(instruction);
    uint16_t addr = compute_direct_address(cpu, instruction);
-   write_memory(cpu->memory, addr, cpu->registers[sr]);
+   cpu->bus_access->write(cpu->bus_access, addr, cpu->registers[sr]);
 }
 
 static void sti(Cpu *cpu, uint16_t instruction) {
    uint16_t addr = compute_indirect_address(cpu, instruction);
    int sr = REG1_INSTRU(instruction);
-   write_memory(cpu->memory, addr, cpu->registers[sr]);
+   cpu->bus_access->write(cpu->bus_access, addr, cpu->registers[sr]);
 }
 
 static void str(Cpu *cpu, uint16_t instruction) {
    uint16_t addr = compute_base_plus_offset(cpu, instruction);
    int sr = REG1_INSTRU(instruction);
-   write_memory(cpu->memory, addr, cpu->registers[sr]);
+   cpu->bus_access->write(cpu->bus_access, addr, cpu->registers[sr]);
 }
 
 static void trap(Cpu *cpu, uint16_t instruction) {
@@ -266,7 +286,7 @@ static void trap(Cpu *cpu, uint16_t instruction) {
       /* ERROR */
    }
    cpu->registers[r7] = cpu->pc;
-   cpu->pc = read_memory(cpu->memory, trapvector);
+   cpu->pc = cpu->bus_access->read(cpu->bus_access, trapvector);
    /*psr &= 0x7FFF; mabye*/
 }
 
@@ -288,85 +308,6 @@ static void load_instructions(void) {
    instru_func_vec[TRAP]     = trap;
 }
 
-/*static void print_registers(void) {
-   printf("r0: 0x%04X\nr1: 0x%04X\nr2: 0x%04X\nr3: 0x%04X\nr4: 0x%04X\nr5: 0x%04X\nr6: 0x%04X\nr7: 0x%04X\n\n\n", 
-       registers[0], registers[1], registers[2], registers[3], 
-       registers[4], registers[5], registers[6], registers[7]);
-}*/
-
-static void io_register_write(struct io_register *io_register, uint16_t value) {
-   struct device *device;
-   device = io_register->data;
-   device->write_register(device, io_register->address, value);
-}
-
-static uint16_t io_register_read(struct io_register *io_register) {
-   struct device *device;
-   device = io_register->data;
-   return device->read_register(device, io_register->address);
-}
-
-static size_t count_device_registers(struct device **devices, size_t num_devices) {
-    size_t num_registers;
-    size_t i;
-    for (i = 0, num_registers = 0; i < num_devices; ++i) {
-      num_registers += devices[i]->num_readable;
-	   num_registers += devices[i]->num_writeable;
-	   num_registers += devices[i]->num_readable_writeable;
-    }
-    return num_registers;
-} 
-
-static size_t device_build_io_registers(struct io_register *io_registers, struct device *device) {
-    size_t i, io_reg_index = 0;
-    for (i = 0; i < device->num_readable; ++i) {
-      io_registers[io_reg_index].data = device;
-	   io_registers[io_reg_index].address = device->readable[i];
-	   io_registers[io_reg_index].read = io_register_read;
-	   io_registers[io_reg_index].write = NULL;
-	   ++io_reg_index;
-    }
-    for (i = 0; i < device->num_writeable; ++i) {
-      io_registers[io_reg_index].data = device;
-	   io_registers[io_reg_index].address = device->writeable[i];
-	   io_registers[io_reg_index].read = NULL;
-	   io_registers[io_reg_index].write = io_register_write;
-	   ++io_reg_index;
-    }
-    for (i = 0; i < device->num_readable_writeable; ++i) {
-      io_registers[io_reg_index].data = device;
-	   io_registers[io_reg_index].address = device->readable_writeable[i];
-	   io_registers[io_reg_index].read = io_register_read;
-	   io_registers[io_reg_index].write = io_register_write;
-	   ++io_reg_index;
-    }
-   return io_reg_index;
-}
-
-static void build_io_registers(struct io_register *io_registers, struct device **devices, size_t num_devices) {
-    size_t io_reg_index, i;
-    for (i = 0, io_reg_index = 0; i < num_devices; ++i) {
-      size_t cur_device_num_reg;
-	   cur_device_num_reg = device_build_io_registers(io_registers + io_reg_index, devices[i]);
-	   io_reg_index += cur_device_num_reg;
-   }
-}
-
-int cpu_attach_devices(Cpu *cpu, struct device **devices, size_t num_devices) {
-    struct io_register *io_registers;
-    size_t num_io_registers, i;
-    num_io_registers = count_device_registers(devices, num_devices);
-    cpu->io_registers = malloc(sizeof(struct io_register) * num_io_registers);
-    if (cpu->io_registers == NULL) {
-        return -1;
-    }
-    build_io_registers(cpu->io_registers, devices, num_devices);
-    for (i = 0; i < num_io_registers; ++i) {
-      memory_register_io_register(cpu->memory, cpu->io_registers + i);
-    }
-    return 0;
-}
-
 static void execute_interrupt(Cpu *cpu, uint8_t vec_location, uint8_t priority) {
    uint16_t priority_extended;
    if (SUPERVISOR_BIT(cpu->psr)) {
@@ -381,13 +322,13 @@ static void execute_interrupt(Cpu *cpu, uint8_t vec_location, uint8_t priority) 
    cpu->psr |= INIT_PSR_MASK_SUPERVISOR;
    /* set priority level */
    priority_extended = priority;
-   cpu->psr |= (priority_extended << 7);
+   cpu->psr |= (priority_extended << 8);
    /* set pc to interrupt vector */
-  cpu->pc = read_memory(cpu->memory, INTERRUPT_VECTOR_TABLE | vec_location);
+   cpu->pc = cpu->bus_access->read(cpu->bus_access, INTERRUPT_VECTOR_TABLE | vec_location);
 }
 
 static void execute_exception(Cpu *cpu, uint8_t vec_location) {
-   uint16_t priority = 0x0007 & (cpu->psr >> 7);
+   uint16_t priority = 0x0007 & (cpu->psr >> 8);
    if (SUPERVISOR_BIT(cpu->psr)) {
       cpu->saved.usp = cpu->registers[r6];
       cpu->registers[r6] = cpu->saved.ssp;
@@ -396,8 +337,22 @@ static void execute_exception(Cpu *cpu, uint8_t vec_location) {
    supervisor_stack_push(cpu, cpu->pc);
    cpu->psr = 0;
    cpu->psr |= INIT_PSR_MASK_SUPERVISOR;
-   cpu->psr |= (priority << 7);
-   cpu->pc = read_memory(cpu->memory, INTERRUPT_VECTOR_TABLE | vec_location);
+   cpu->psr |= (priority << 8);
+   cpu->pc = cpu->bus_access->read(cpu->bus_access, INTERRUPT_VECTOR_TABLE | vec_location);
+}
+
+static int interrupt_comparator(uint8_t psr_priority, uint8_t inter_priority) {
+   return inter_priority > psr_priority;
+}
+
+static void check_interrupts_and_exceptions(Cpu *cpu) {
+   struct interrupt_checker *inter_check;
+   uint8_t vec, priority;
+   inter_check = cpu->inter_check;
+   //printf("check interrupts\n");
+   if (inter_check->check_interrupt(inter_check, PSR_PRIORITY(cpu->psr), &vec, &priority, interrupt_comparator)) {
+      execute_interrupt(cpu, vec, priority);
+   }
 }
 
 /*static void check_interrupts_and_exceptions(Cpu *cpu) {
@@ -422,88 +377,52 @@ static void execute_exception(Cpu *cpu, uint8_t vec_location) {
    }
 }*/
 
-static uint16_t mcr_read(struct io_register *mcr_register) {
-    Cpu *cpu;
-    cpu = mcr_register->data;
-    return cpu->mcr.mcr_data;
-}
-
-static void mcr_write(struct io_register *mcr_register, uint16_t value) {
-    Cpu *cpu;
-    cpu = mcr_register->data;
-    cpu->mcr.mcr_data = value;
-}
-
-static void setup_mcr(Cpu *cpu) {
-    cpu->mcr.mcr_data = 0;
-    cpu->mcr.mcr_data |= 0x8000;
-    cpu->mcr.mcr_register.data = cpu;
-    cpu->mcr.mcr_register.address = MCR_ADDR;
-    cpu->mcr.mcr_register.read = mcr_read;
-    cpu->mcr.mcr_register.write = mcr_write;
-
-    memory_register_io_register(cpu->memory, &cpu->mcr.mcr_register);
-}
-
 void free_cpu(Cpu *cpu) {
-   free_memory(cpu->memory);
-   free(cpu->io_registers);
    free(cpu);
 }
 
-uint16_t cpu_read_memory(Cpu *cpu, uint16_t address) {
-    return read_memory(cpu->memory, address);
-}
-
-void cpu_write_memory(Cpu *cpu, uint16_t address, uint16_t value) {
-    write_memory(cpu->memory, address, value);
-}
-
-void cpu_load_program(Cpu *cpu, const uint16_t *program, size_t amt) {
-   size_t i;
-   uint16_t cur_addr, max_addr;
-   if (amt == 1) {
-      return;
-   }
-   max_addr = MAX_PROGRAM_LEN - 1;
-   cur_addr = program[0];
-   cpu->pc = cur_addr;
-   for (i = 1; i < amt && cur_addr <= max_addr; ++i, ++cur_addr) {
-      write_memory(cpu->memory, cur_addr, program[i]);
-   }
-}
-
-Cpu *new_Cpu(struct interrupt_controller *interrupt_controller) {
-   Cpu *cpu = calloc(1, sizeof(struct Cpu));
+Cpu *new_Cpu(struct bus_accessor *bus_access, struct interrupt_checker *inter_check) {
+   Cpu *cpu;
+   cpu = malloc(sizeof(Cpu));
    if (cpu == NULL) {
       return NULL;
    }
-   cpu->memory = new_Memory();
-   if (cpu->memory == NULL) {
-      free(cpu);
-      return NULL;
-   }
+   cpu->bus_access = bus_access;
+   cpu->inter_check = inter_check;
    setup_exceptions(cpu);
    if (!instructions_loaded) {
       load_instructions();
    }
-   setup_mcr(cpu);
-   cpu->interrupt_controller = interrupt_controller;
+   cpu->on_tick = NULL;
+   cpu->on_tick_data = NULL;
+   memset(cpu->registers, 0, sizeof(uint16_t) * 8);
+   bus_access->write(bus_access, MCR_ADDR, 0x8000);
    return cpu;
+}
+
+void cpu_subscribe_on_tick(Cpu *cpu, void (*callback)(void *), void *data) {
+   cpu->on_tick = callback;
+   cpu->on_tick_data = data;
+}
+
+void cpu_set_program_counter(Cpu *cpu, uint16_t address) {
+   cpu->pc = address;
 }
 
 void cpu_execute_until_end(Cpu *cpu) {
    instru_func func;
-   while (CLOCK_ENABLED(cpu->mcr.mcr_data)) {
-      int opcode;
-      uint16_t instruction;
-      instruction = read_memory(cpu->memory, cpu->pc++);
+   int opcode;
+   uint16_t instruction;
+   while (CLOCK_ENABLED(cpu->bus_access->read(cpu->bus_access, MCR_ADDR))) {
+      instruction = cpu->bus_access->read(cpu->bus_access, cpu->pc++);
       opcode = OPCODE(instruction);
       if (opcode > 15 || opcode == 13) {
          cpu->illegal_opcode_exception_line.toggle = 1;
+      } else {
+         func = instru_func_vec[opcode];
+         func(cpu, instruction);
       }
-      func = instru_func_vec[opcode];
-      func(cpu, instruction);
-      //check_interrupts_and_exceptions(cpu);
+      check_interrupts_and_exceptions(cpu);
+      if (cpu->on_tick != NULL) cpu->on_tick(cpu->on_tick_data);
    }
 }

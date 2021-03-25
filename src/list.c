@@ -71,6 +71,11 @@ void **list_free_and_return_as_array(List *list, size_t *num_elements) {
         return NULL;
     }
     *num_elements = list->size;
+    if (list->size == 0) {
+        free(list->data);
+        free(list);
+        return NULL;
+    }
     array = realloc(list->data, sizeof(void *) * list->size);
     if (array == NULL) {
         array = list->data;

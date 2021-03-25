@@ -15,7 +15,7 @@ size_t read_convert_16bits(uint16_t *dest, size_t amt, FILE *file) {
       if (fread(&result, sizeof(uint16_t), 1, file) == 0) {
          break;
       }
-      *dest = htons(result);
+      *dest = ntohs(result);
       ++dest;
    }
    return i;
@@ -78,6 +78,8 @@ char *alloc_strcpy(const char *src) {
     strcpy(dst, src);
     return dst;
 }
+
+
 
 
 

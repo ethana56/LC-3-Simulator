@@ -6,209 +6,244 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/types.h>
+#include <arpa/inet.h>
 #include <dirent.h>
 
 #include "util.h"
-#include "list.h"
 #include "input_output.h"
 #include "plugin_manager.h"
-#include "device_impl.h"
 #include "terminal.h"
-#include "cpu.h"
+#include "simulator.h"
+#include "list.h"
+
+#ifdef __linux__
+#define EXTENSION "so"
+#endif
+#ifdef __APPLE_
+#define EXTENSION "dylib"
+#endif
+
+#define INITIAL_PROGRAM_BUF_LEN 50
+
+struct ui {
+    Simulator *simulator;
+    struct device_plugin_data **plugins, **on_input_plugins, **on_tick_plugins;
+    size_t num_plugins, num_on_input_plugins, num_on_tick_plugins;
+    struct host host;
+};
+
 
 enum command_option {RUN, INVALID};
 
-/*static enum command_option get_command_option(char *command) {
-    if (strcmp(command, "run") == 0) {
-        return RUN;
-    }
-    return INVALID;
-}*/
-
 static int get_user_input(char *buffer, size_t buffer_size) {
+    size_t str_len;
     printf("command> ");
     fflush(stdout);
     if (fgets(buffer, buffer_size, stdin) == NULL) {
         return -1;
     }
+    buffer[strcspn(buffer, "\n")] = '\0';
     return 0;
 }
 
-/*static int do_command(Cpu *simulator, char *buffer, int *err) {
-    *err     = 0;
-    int result = 0;
-    enum command_option command = get_command_option(buffer);
-    if (command == INVALID) {
-        puts("Invalid command");
-        result =  1;
-    } else if (command == RUN) {
-        cpu_execute_until_end(simulator);
-        result = 0;
+static int program_reader(void *data, uint16_t *program_word) {
+    FILE *program_file = data;
+    int result;
+    result = fread(program_word, sizeof(uint16_t), 1, program_file);
+    if (result == 0 && ferror(program_file)) {
+        return -1;
+    } else if (result == 0) {
+        return 0;
     }
+    *program_word = ntohs(*program_word);
     return result;
-}*/
+}
 
-static int load_program(Cpu *cpu, char *path) {
+static int load_program(struct ui *user_interface, char *program_name) {
     FILE *program;
-    size_t amt_read;
-    int result = 0;
-    uint16_t buf[MAX_PROGRAM_LEN];
-    program = fopen(path, "r");
+    program = fopen(program_name, "r");
     if (program == NULL) {
-	perror(path);    
         return -1;
     }
-    amt_read = read_convert_16bits(buf, MAX_PROGRAM_LEN, program);
-    if (ferror(program)) {
-	    perror(path);    
-        result = -1;
+    if (simulator_load_program(user_interface->simulator, program_reader, program) < 0) {
+        return -1;
     }
     fclose(program);
-    cpu_load_program(cpu, buf, amt_read);
-    return result;
+    return 0;
 }
 
-static int load_operating_system(Cpu *cpu) {
-    return load_program(cpu, "os.obj");
-}
-
-static int ui_loop(Cpu *cpu) {
-    char buffer[BUFSIZ];
-    fgets(buffer, sizeof(buffer), stdin);
-    buffer[strlen(buffer) - 1] = '\0';
+static int prepare_terminal(void) {
+    if (set_nonblock(STDIN_FILENO) < 0 || set_nonblock(STDOUT_FILENO)) {
+        /* TODO: REVERT STDIN_FILENO TO BLOCKING IF SET_NONBLOCK(STDOUT_FILENO) FAILS */
+        return -1;
+    }
     if (init_terminal() < 0) {
         return -1;
     }
-    if (load_operating_system(cpu) < 0) {
-        return -1;
-    }
-    if (load_program(cpu, buffer) < 0) {
-        return -1;
-    }
-    if (set_nonblock(STDIN_FILENO) < 0) {
-        return -1;
-    }
-    if (set_nonblock(STDOUT_FILENO) < 0) {
-        return -1;
-    }
-    cpu_execute_until_end(cpu);
     return 0;
 }
 
-//static int ui_loop(Cpu *cpu, int infd, int outfd) {
-    //char buffer[PATH_MAX];
-    //int should_continue = 1;
-    //set_user_io_mode(std_input_output);
-    /*while (should_continue) {
-        if (get_user_input(buffer, sizeof(buffer)) < 0) {
+static int ui_loop(struct ui *user_interface) {
+    char input[100];
+    for (;;) {
+        if (get_user_input(input, sizeof(input)) < 0) return -1;
+        if (strcmp(input, "run") == 0) {
+            if (prepare_terminal() < 0) {
+                return -1;
+            }
+            simulator_run_until_end(user_interface->simulator);
+            return 0;
+        }
+        if (load_program(user_interface, input) < 0) {
+            if (errno == ENOENT) {
+                fprintf(stderr, "%s: %s\n", input, strerror(errno));
+                continue;
+            }
             return -1;
         }
-        int err;
-        should_continue = do_command(simulator, buffer, &err);
-        if (err) {
-            return -1;
+    }
+}
+
+static void err_exit(char *msg) {
+    write(STDERR_FILENO, msg, strlen(msg));
+    write(STDERR_FILENO, "\n", 1);
+    exit(EXIT_FAILURE);
+}
+
+static int attach_plugins(struct ui *user_interface) {
+    size_t i;
+    int status = 0;
+    for (i = 0; i < user_interface->num_plugins && status >= 0; ++i) {
+        struct device_plugin *cur_plugin;
+        uint16_t *addresses;
+        size_t num_addresses;
+        uint16_t (*read_register)(uint16_t);
+        void (*write_register)(uint16_t, uint16_t);
+        cur_plugin = user_interface->plugins[i]->plugin;
+        addresses = cur_plugin->addresses;
+        num_addresses = cur_plugin->num_addresses;
+        read_register = cur_plugin->read_register;
+        write_register = cur_plugin->write_register;
+        
+        switch (cur_plugin->method) {
+        case RANGE:
+            status = simulator_bind_addresses_range(user_interface->simulator, addresses[0], addresses[1], read_register, write_register);
+            break;
+        case SEPERATE:
+            status = simulator_bind_addresses(user_interface->simulator, addresses, num_addresses, read_register, write_register);        
         }
-
-    }*/
-    /*get_user_input(buffer, sizeof(buffer));
-    simulator_load_program(simulator, buffer);
-   simulator_execute_until_end(simulator);*/
-    //return 0;
-//}
-
-static void log_error(char *error) {
-    fputs(error, stderr);
-    fputs("\n", stderr);
+    }
+    if (status < 0) {
+        simulator_unbind_all_addresses(user_interface->simulator);
+    }
+    return status;
 }
 
-/*static int cmp_file_extension(const char *filename, const char *file_extension) {
-    char *ext;
-    ext = strchr(filename, '.');
-    if (ext == NULL) {
-        return 0;
-    }
-    ext = ext + 1;
-    return strcmp(ext, file_extension) == 0;
-}*/
-
-static void free_devices(struct device **devices, size_t num_devices) {
+static void on_tick(void *data) {
+    struct ui *user_interface;
+    ssize_t result;
     size_t i;
-    for (i = 0; i < num_devices; ++i) {
-        device_impl_free(devices[i]);
+    char input;
+    user_interface = data;
+    result = read(STDIN_FILENO, &input, 1);
+    if (result < 0) {
+        if (errno == EWOULDBLOCK || errno == EAGAIN) {
+            return;
+        }
+        fprintf(stderr, "error reading input\n");
     }
-    free(devices);
-}
-
-static void free_plugins(struct device_plugin **plugins, size_t num_plugins) {
-    size_t i;
-    for (i = 0; i < num_plugins; ++i) {
-       pm_free_plugin(plugins[i]);
-       plugins[i] = NULL;
+    for (i = 0; i < user_interface->num_on_input_plugins; ++i) {
+        user_interface->on_input_plugins[i]->plugin->on_input(input);
+    }
+    for (i = 0; i < user_interface->num_on_tick_plugins; ++i) {
+        user_interface->on_tick_plugins[i]->plugin->on_tick();
     }
 }
 
-static struct device **create_devices(struct device_plugin **plugins, size_t num_plugins) {
-    struct device **devices;
+static void write_output(struct host *host, char output) {
+    safe_write(STDOUT_FILENO, &output, 1);
+}
+
+static void alert_interrupt(struct host *host, uint8_t vec, uint8_t priority) {
+
+}
+
+static void subscribe_simulator_events(struct ui *user_interface) {
+    Simulator *simulator;
+    simulator = user_interface->simulator;
+    simulator_subscribe_on_tick(simulator, on_tick, user_interface);
+}
+
+static int check_plugin_subscriptions(struct ui *user_interface) {
+    List *on_input_plugins, *on_tick_plugins;
     size_t i;
-    devices = malloc(sizeof(struct device *) * num_plugins);
-    if (devices == NULL) {
-        return NULL;
+    on_input_plugins = new_List(2, 1.0);
+    if (on_input_plugins == NULL) {
+        goto on_input_plugins_alloc_err;
     }
-    for (i = 0; i < num_plugins; ++i) {
-        devices[i] = create_device_impl(plugins[i]);
-	    if (devices[i] == NULL) {
-            free_devices(devices, i);
-	        free(devices);
-	        return NULL;
-	    }
+    on_tick_plugins = new_List(2, 1.0);
+    if (on_tick_plugins == NULL) {
+        goto on_tick_plugins_alloc_err;
     }
-    return devices;
+    for (i = 0; i < user_interface->num_plugins; ++i) {
+        struct device_plugin_data *device_plugin;
+        device_plugin = user_interface->plugins[i];
+        if (device_plugin->plugin->on_input != NULL) {
+            if (list_add(on_input_plugins, device_plugin) < 0) {
+                goto list_add_err;
+            }
+        }
+        if (device_plugin->plugin->on_tick != NULL) {
+            if (list_add(on_tick_plugins, device_plugin) < 0) {
+                goto list_add_err;
+            }
+        }
+    }
+    user_interface->on_input_plugins = (struct device_plugin_data **)list_free_and_return_as_array(on_input_plugins, &user_interface->num_on_input_plugins);
+    user_interface->on_tick_plugins = (struct device_plugin_data **)list_free_and_return_as_array(on_tick_plugins, &user_interface->num_on_tick_plugins);
+    return 0;
+
+list_add_err:
+    list_free(on_tick_plugins);
+on_tick_plugins_alloc_err:
+    list_free(on_input_plugins);
+on_input_plugins_alloc_err:
+    return -1;            
 }
 
 void start(void) {
-    Cpu *cpu;
-    struct device_plugin **plugins;
-    struct device **devices;
-    size_t num_devices;
-    char error_string[PM_ERROR_STR_SIZ];
-    plugins = pm_load_device_plugins("./devices", &num_devices, error_string);
-    if (plugins == NULL) {
-	    fprintf(stderr, "error opening devices directory: %s\n", error_string);    
-	    goto load_plugins_err;
-    }
-    init_device_impl(STDIN_FILENO, STDOUT_FILENO, log_error);
-    devices = create_devices(plugins, num_devices);
-    if (devices == NULL) {
-        perror(NULL);
-	    goto create_devices_err;
-    }
-    /* Freeing the array of pointers, not the plugins themselved */
-    free(plugins);
-    plugins = NULL;
-    cpu = new_Cpu();
-    if (cpu == NULL) {
-        perror(NULL);
-	    goto create_cpu_err;
-    }
-    if (cpu_attach_devices(cpu, devices, num_devices) < 0) {
-        perror(NULL);
-	    goto cpu_attach_devices_err;
-    }
-    ui_loop(cpu);
+    struct ui user_interface;
+    char load_devices_err_str[PM_ERROR_STR_SIZ];
 
-cpu_attach_devices_err:
-    free_cpu(cpu);
-create_cpu_err:
-    free_devices(devices, num_devices);
-create_devices_err:
-    free_plugins(plugins, num_devices);
-    free(plugins);
-load_plugins_err:
-    exit(EXIT_FAILURE);
-
+    user_interface.simulator = simulator_new();
+    if (user_interface.simulator == NULL) {
+        err_exit(strerror(errno));
+    }
+    user_interface.host.data = &user_interface;
+    user_interface.host.write_output = write_output;
+    user_interface.host.alert_interrupt = alert_interrupt;
+    user_interface.plugins = pm_load_device_plugins("../devices", EXTENSION, &user_interface.num_plugins, &user_interface.host, load_devices_err_str);
+    if (user_interface.plugins == NULL) {
+        simulator_free(user_interface.simulator);
+        err_exit(load_devices_err_str);
+    }
+    if (attach_plugins(&user_interface) < 0) {
+        simulator_free(user_interface.simulator);
+        pm_plugins_free(user_interface.plugins, user_interface.num_plugins);
+        err_exit(strerror(errno));
+    }
+    if (check_plugin_subscriptions(&user_interface) < 0) {
+        simulator_free(user_interface.simulator);
+        pm_plugins_free(user_interface.plugins, user_interface.num_plugins);
+        err_exit(strerror(errno));
+    }
+    subscribe_simulator_events(&user_interface);
+    if (ui_loop(&user_interface) < 0) {
+        simulator_free(user_interface.simulator);
+        pm_plugins_free(user_interface.plugins, user_interface.num_plugins);
+        err_exit(strerror(errno));
+    }
 }
-
-
 
 
 

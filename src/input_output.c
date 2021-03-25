@@ -4,6 +4,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/select.h>
 #include <pthread.h>
 #include <errno.h>
 
@@ -152,13 +153,12 @@ static int start_listener(StdInputOutput *std_input_output) {
     return 0;
 }
 
-int stdinputoutput_device_write_display(StdInputOutput *std_input_output, unsigned char byte) {
+int std_input_output_get_display_fd(StdInputOutput *std_input_output) {
 
-    return 0;
 }
 
-int stdinputoutput_device_read_keyboard(StdInputOutput *std_input_output) {
-    return 0;
+int std_input_output_get_keyboard_fd(StdInputOutput *std_input_output) {
+
 }
 
 void give_back_std_input_output(StdInputOutput *std_input_output) {

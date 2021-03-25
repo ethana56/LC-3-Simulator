@@ -2,28 +2,25 @@
 #define DEVICE_PLUGIN_H
 
 #include <stdint.h>
+#include <stdlib.h>
+
+enum address_method {RANGE, SEPERATE};
 
 struct host {
     void *data;
-    int (*get_keyboard_in_fd)(struct host *);
-    int (*get_display_out_fd)(struct host *);
-    void (*add_listener_read)(struct host *, int, void (*)(int, void *), void *);
-    void (*log_error)(struct host *, char *);
-    void (*close)(struct host *);
+    void (*write_output)(struct host *, char);
+    void (*alert_interrupt)(struct host *, uint8_t vec, uint8_t priority);
 };
 
 struct device_plugin {
-    void *data;	
-    uint16_t *readable;
-    uint16_t *writeable;
-    uint16_t *readable_writeable;
-    size_t num_readable;
-    size_t num_writeable;
-    size_t num_readable_writeable;
-    uint16_t (*read_register)(uint16_t);
-    void (*write_register)(uint16_t, uint16_t);
-    void (*start)(struct host *);
-    void (*cleanup)(void);
+    uint16_t (*read_register)(uint16_t address);
+    void (*write_register)(uint16_t address, uint16_t value);
+    void (*on_input)(char);
+    void (*on_tick)(void);
+    void (*free)(struct device_plugin *);
+    uint16_t *addresses;
+    size_t num_addresses;
+    enum address_method method;
 };
 
 #endif
