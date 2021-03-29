@@ -413,7 +413,9 @@ void cpu_execute_until_end(Cpu *cpu) {
    instru_func func;
    int opcode;
    uint16_t instruction;
+   unsigned long long cycles = 0;
    while (CLOCK_ENABLED(cpu->bus_access->read(cpu->bus_access, MCR_ADDR))) {
+      printf("cycles: %llu\n", cycles);
       instruction = cpu->bus_access->read(cpu->bus_access, cpu->pc++);
       opcode = OPCODE(instruction);
       if (opcode > 15 || opcode == 13) {
@@ -424,5 +426,6 @@ void cpu_execute_until_end(Cpu *cpu) {
       }
       check_interrupts_and_exceptions(cpu);
       if (cpu->on_tick != NULL) cpu->on_tick(cpu->on_tick_data);
+      ++cycles;
    }
 }

@@ -19,7 +19,7 @@
 #ifdef __linux__
 #define EXTENSION "so"
 #endif
-#ifdef __APPLE_
+#ifdef __APPLE__
 #define EXTENSION "dylib"
 #endif
 
@@ -174,41 +174,20 @@ static void subscribe_simulator_events(struct ui *user_interface) {
     simulator_subscribe_on_tick(simulator, on_tick, user_interface);
 }
 
-static int check_plugin_subscriptions(struct ui *user_interface) {
-    List *on_input_plugins, *on_tick_plugins;
+static int attach_devices(struct ui *user_interface, struct device **devices, size_t num_devices) {
     size_t i;
-    on_input_plugins = new_List(2, 1.0);
-    if (on_input_plugins == NULL) {
-        goto on_input_plugins_alloc_err;
-    }
-    on_tick_plugins = new_List(2, 1.0);
-    if (on_tick_plugins == NULL) {
-        goto on_tick_plugins_alloc_err;
-    }
-    for (i = 0; i < user_interface->num_plugins; ++i) {
-        struct device_plugin_data *device_plugin;
-        device_plugin = user_interface->plugins[i];
-        if (device_plugin->plugin->on_input != NULL) {
-            if (list_add(on_input_plugins, device_plugin) < 0) {
-                goto list_add_err;
+    for (i = 0; i < num_devices; ++i) {
+        struct device *cur_device;
+        cur_device = devices[i];
+        if (simulator_attach_device(user_interface->simulator, cur_device) < 0) {
+            if (errno == EINVAL) {
+                fprintf(stderr, "(device plugin path here) address map conflicts with another\n");
+                continue;
             }
-        }
-        if (device_plugin->plugin->on_tick != NULL) {
-            if (list_add(on_tick_plugins, device_plugin) < 0) {
-                goto list_add_err;
-            }
+            return -1;
         }
     }
-    user_interface->on_input_plugins = (struct device_plugin_data **)list_free_and_return_as_array(on_input_plugins, &user_interface->num_on_input_plugins);
-    user_interface->on_tick_plugins = (struct device_plugin_data **)list_free_and_return_as_array(on_tick_plugins, &user_interface->num_on_tick_plugins);
     return 0;
-
-list_add_err:
-    list_free(on_tick_plugins);
-on_tick_plugins_alloc_err:
-    list_free(on_input_plugins);
-on_input_plugins_alloc_err:
-    return -1;            
 }
 
 void start(void) {

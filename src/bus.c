@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include "bus.h"
+#include "device.h"
 
 #define ATTACHMENT_SIZE_INIT       5
 #define ATTACHMENT_SIZE_MULTIPLIER 2
@@ -16,8 +17,7 @@ struct interval {
 };
 
 struct bus_attachment {
-    uint16_t (*read)(uint16_t);
-    void (*write)(uint16_t, uint16_t);
+    struct device *device;
     struct interval range;
 };
 
@@ -93,6 +93,18 @@ static int bus_grow_attachments(Bus *bus) {
     return 0;
 }
 
+static int bus_add_attachment(Bus *bus, struct device *device, struct interval *interval) {
+    struct bus_attachment *attachment;
+    int i;
+    if (bus_contains_interval(bus, interval)) {
+        return ADDRESS_TAKEN;
+    }
+    if (bus->num_attachments == bus->attachments_size) {
+
+    }
+    
+}
+
 /* only call if addresses don't overlap with any existing */
 static int bus_add_attachment(Bus *bus, uint16_t (*read)(uint16_t), void (*write)(uint16_t, uint16_t), struct interval *interval) {
     struct bus_attachment *attachment;
@@ -127,6 +139,33 @@ static int bus_contains_interval(Bus *bus, struct interval *interval) {
         }
     }
     return 0;
+}
+
+static void bus_remove_attachment(Bus *bus, struct device *device) {
+
+}
+
+static int bus_add_atachment_seperate(Bus *bus, struct device *device) {
+    uint16_t *addresses;
+    size_t num_addresses, i;
+    addresses = device->get_addresses(device, &num_addresses);
+    for (i = 0; i < num_addresses; ++i) {
+        if (bus_add_attachment(bus, device, addresses[i], addresses[i]) < 0) {
+            bus_remove_attachment(bus, device);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int bus_attach(Bus *bus, struct device *device) {
+    size_t num_addresses;
+    switch (device->get_address_method(device)) {
+    case RANGE:
+        return bus_add_attachment(bus, device, device->get_addresses(device, &num_addresses)[0], device->get_addresses(device, &num_addresses)[1]);
+    case SEPERATE:
+        return bus_add_attachment_seperate(bus, device);
+    }
 }
 
 int bus_attach(Bus *bus, uint16_t (*read)(uint16_t), void (*write)(uint16_t, uint16_t), uint16_t low, uint16_t high) {

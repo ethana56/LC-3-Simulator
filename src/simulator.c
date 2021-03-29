@@ -9,6 +9,7 @@
 #include "bus.h"
 #include "list.h"
 #include "simulator.h"
+#include "device.h"
 
 struct simulator {
     struct bus_accessor bus_accessor;
@@ -16,6 +17,11 @@ struct simulator {
     Cpu *cpu;
     Bus *bus;
     InterruptController *inter_cont;
+    struct device_io *device_io;
+    struct device **on_input_devices;
+    size_t num_on_input;
+    struct device **on_tick_devices;
+    size_t num_on_tick;
 };
 
 static int simulator_check_interrupt(
@@ -71,7 +77,9 @@ void simulator_subscribe_on_tick(Simulator *simulator, void (*callback)(void *),
 }
 
 void simulator_run_until_end(Simulator *simulator) {
+    simulator->device_io->start(simulator->device_io);
     cpu_execute_until_end(simulator->cpu);
+    simulator->device_io->end(simulator->device_io);
 }
 
 int simulator_load_program(Simulator *simulator, int (*callback)(void *, uint16_t *), void *data) {
@@ -91,7 +99,51 @@ int simulator_load_program(Simulator *simulator, int (*callback)(void *, uint16_
     return callback_result;
 }
 
-Simulator *simulator_new(void) {
+static int simulator_check_device_subscriptions(Simulator *simulator, struct device **devices, size_t num_devices) {
+    List *on_input_devices, *on_tick_devices;
+    size_t i;
+    on_input_devices = new_List(2, 1.0);
+    if (on_input_devices == NULL) {
+        goto on_input_devices_alloc_err;
+    }
+    on_tick_devices = new_List(2, 1.0);
+    if (on_tick_devices == NULL) {
+        goto on_tick_devices_alloc_err;
+    }
+    for (i = 0; i < num_devices; ++i) {
+        struct device *cur_device;
+        cur_device = devices[i];
+        if (cur_device->on_input != NULL) {
+            if (list_add(on_input_devices, cur_device) < 0) {
+                goto list_add_err;
+            }
+        }
+        if (cur_device->on_tick != NULL) {
+            if (list_add(on_tick_devices, cur_device) < 0) {
+                goto list_add_err;
+            }
+        }
+    }
+    simulator->on_input_devices = (struct device **)list_free_and_return_as_array(on_input_devices, &simulator->num_on_input);
+    simulator->on_tick_devices = (struct device **)list_free_and_return_as_array(on_tick_devices, &simulator->num_on_tick);
+    return 0;
+
+list_add_err:
+    list_free(on_tick_devices);
+on_tick_devices_alloc_err:
+    list_free(on_input_devices);
+on_input_devices_alloc_err:
+    return -1;            
+}
+
+int simulator_attach_device(Simulator *simulator, struct device *device) {
+    if (bus_attach(simulator->bus, device) < 0) {
+        return -1;
+    }
+    return simulator_check_device_subscriptions(simulator, device);
+}
+
+Simulator *simulator_new(struct device_input *device_io) {
     Simulator *simulator;
     simulator = malloc(sizeof(Simulator));
     if (simulator == NULL) {
@@ -111,6 +163,7 @@ Simulator *simulator_new(void) {
     if (simulator->cpu == NULL) {
         goto cpu_alloc_err;
     }
+    simulator->device_io = device_io;
     return simulator;
 
 cpu_alloc_err:

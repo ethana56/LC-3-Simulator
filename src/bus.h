@@ -5,6 +5,8 @@
 
 #define BUS_NUM_ADDRESSES 65536
 
+enum bus_error {NO_ERROR, READ_ERRNO, ADDRESS_TAKEN};
+
 struct bus_impl;
 typedef struct bus_impl Bus;
 

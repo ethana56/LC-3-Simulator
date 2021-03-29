@@ -3,13 +3,11 @@
 
 #include <stdio.h>
 
-#include "device_plugin.h"
-
 #define PM_ERROR_STR_SIZ BUFSIZ
 
-struct device_plugin_data {
+struct device_data {
     void *dlhandle;
-    struct device_plugin *plugin;
+    struct device *device;
 };
 
 struct device_plugin_data **pm_load_device_plugins(const char *, const char *, size_t *, struct host *, char *);
