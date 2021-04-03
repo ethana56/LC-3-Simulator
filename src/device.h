@@ -14,12 +14,13 @@ enum address_method {RANGE, SEPERATE};
 
 struct device {
     void *data;
+    void (*start)(struct device *, struct host *);
     uint16_t (*read_register)(struct device *, uint16_t address);
     void (*write_register)(struct device *, uint16_t address, uint16_t value);
-    void (*on_input)(struct device *, char);
+    void (*on_input)(struct device *, uint16_t);
     void (*on_tick)(struct device *);
     void (*free)(struct device *);
-    uint16_t *(*get_addresses)(struct device *, size_t *);
+    const uint16_t *(*get_addresses)(struct device *, size_t *);
     enum address_method (*get_address_method)(struct device *);
 };
 

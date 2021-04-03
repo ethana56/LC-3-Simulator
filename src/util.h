@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 size_t read_convert_16bits(uint16_t *, size_t, FILE *);
+int set_blocking(int fd);
 int set_nonblock(int fd);
 size_t safe_strcat(char *dest, char *src, size_t dest_len);
 char *safe_strncpy(char *dst, char *src, size_t len);

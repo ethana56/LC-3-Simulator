@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 
-#define BUS_NUM_ADDRESSES 65536
+#include "device.h"
 
-enum bus_error {NO_ERROR, READ_ERRNO, ADDRESS_TAKEN};
+#define BUS_NUM_ADDRESSES 65536
 
 struct bus_impl;
 typedef struct bus_impl Bus;
@@ -15,7 +15,7 @@ void bus_free(Bus *);
 
 void bus_print(Bus *);
 
-int bus_attach(Bus *bus, uint16_t (*read)(uint16_t), void (*write)(uint16_t, uint16_t), uint16_t, uint16_t);
+int bus_attach(Bus *bus, struct device *);
 
 /*void bus_remove_all_attachments(Bus *bus);*/
 
