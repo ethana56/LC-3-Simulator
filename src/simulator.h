@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+#include "device.h"
+#include "device_io.h"
+
 #define LOW_ADDRESS  0
 #define HGIH_ADDRESS UINT16_MAX
 
@@ -14,14 +17,12 @@
 struct simulator;
 typedef struct simulator Simulator;
 
-int simulator_bind_addresses(Simulator *, uint16_t *, size_t, uint16_t (*)(uint16_t), void (*)(uint16_t, uint16_t));
-int simulator_bind_addresses_range(Simulator *, uint16_t, uint16_t, uint16_t (*)(uint16_t), void (*)(uint16_t, uint16_t));
-void simulator_unbind_all_addresses(Simulator *);
-void simulator_subscribe_on_tick(Simulator *, void (*)(void *), void *);
-void simulator_run_until_end(Simulator *);
+int simulator_run_until_end(Simulator *);
+int simulator_load_program(Simulator *, int (*)(void *, uint16_t *), void *);
+int simulator_attach_device(Simulator *, struct device *);
 int simulator_load_program(Simulator *, int (*)(void *, uint16_t *), void *);
 
-Simulator *simulator_new(void);
+Simulator *simulator_new(struct device_io *);
 void simulator_free(Simulator *);
 
 #endif

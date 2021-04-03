@@ -1,14 +1,19 @@
 #ifndef LIST_H
 #define LIST_H
 
+#include <stdlib.h>
 
 struct list;
 typedef struct list List;
 
-List *new_List(size_t, size_t, double);
+List *list_new(size_t, size_t, double);
 int list_add(List *, void *);
+void *list_get(List *, size_t);
+void list_sort(List *, int (*)(const void *, const void *));
+void *list_bsearch(List *, void *, int (*)(const void *, const void *));
+size_t list_num_elements(List *);
 void *list_to_array_no_cpy(List *, size_t *);
-void *convert_to_array(List *, size_t *);
+void *list_convert_to_array(List *, size_t *);
 void list_free(List *);
 
 #endif
