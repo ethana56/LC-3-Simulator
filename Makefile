@@ -10,14 +10,15 @@ SRC=$(wildcard $(SRC_DIR)/*.c)
 OBJ=$(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRC))
 
 CPPFLAGS=-MMD -MP
-CFLAGS=-Wall -Werror -ldl -lpthread -g
+CFLAGS=-Wall -Werror -g
+LDFLAGS=-ldl -lpthread -g
 
 .PHONY: all clean
 
 all: $(EXE)
 
 $(EXE): $(OBJ) | $(BIN_DIR)
-	$(CC) $(OBJ) -o $@ $(CFLAGS) 
+	$(CC) $(OBJ) -o $@ $(CFLAGS) $(LDFLAGS)
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
