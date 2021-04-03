@@ -7,6 +7,7 @@
 
 #include "bus.h"
 #include "device.h"
+#include "list.h"
 
 #define ATTACHMENT_SIZE_INIT       5
 #define ATTACHMENT_SIZE_MULTIPLIER 2
@@ -27,9 +28,7 @@ struct mem {
 };
 
 struct bus_impl {
-    struct bus_attachment *attachments;
-    size_t num_attachments;
-    size_t attachments_size;
+    List *attachments;
     struct mem memory[BUS_NUM_ADDRESSES];
 };
 
@@ -39,19 +38,17 @@ Bus *bus_new(void) {
     if (bus == NULL) {
         return NULL;
     }
-    bus->attachments = malloc(sizeof(struct bus_attachment) * ATTACHMENT_SIZE_INIT);
+    bus->attachments = list_new(sizeof(struct bus_attachment), ATTACHMENT_SIZE_INIT, ATTACHMENT_SIZE_MULTIPLIER);
     if (bus->attachments == NULL) {
         free(bus);
         return NULL;
     }
-    bus->num_attachments = 0;
-    bus->attachments_size = ATTACHMENT_SIZE_INIT;
     memset(bus->memory, 0, sizeof(struct mem) * BUS_NUM_ADDRESSES);
     return bus;
 }
 
 void bus_free(Bus *bus) {
-    free(bus->attachments);
+    list_free(bus->attachments);
     free(bus);
 }
 
@@ -78,79 +75,64 @@ static int bsearch_attachment_comparator(const void *key, const void *element) {
         result = 1;
     }
     return result;
-} 
-
-static int bus_grow_attachments(Bus *bus) {
-    struct bus_attachment *bigger_attachments;
-    size_t bigger_num_members;
-    bigger_num_members = bus->attachments_size * ATTACHMENT_SIZE_MULTIPLIER;
-    bigger_attachments = realloc(bus->attachments, sizeof(struct bus_attachment) * bigger_num_members);
-    if (bigger_attachments == NULL) {
-        return -1;
-    }
-    bus->attachments = bigger_attachments;
-    bus->attachments_size = bigger_num_members;
-    return 0;
 }
 
-static int bus_add_attachment(Bus *bus, struct device *device, struct interval *interval) {
-    struct bus_attachment *attachment;
-    int i;
-    if (bus_contains_interval(bus, interval)) {
-        return ADDRESS_TAKEN;
-    }
-    if (bus->num_attachments == bus->attachments_size) {
 
-    }
-    
+static int intervals_overlap(struct interval interval1, struct interval interval2) {
+    return (interval2.low <= interval1.high) && (interval2.high >= interval1.low);
 }
 
-/* only call if addresses don't overlap with any existing */
-static int bus_add_attachment(Bus *bus, uint16_t (*read)(uint16_t), void (*write)(uint16_t, uint16_t), struct interval *interval) {
-    struct bus_attachment *attachment;
-    int i;
-    if (bus->num_attachments == bus->attachments_size) {
-        if (bus_grow_attachments(bus) < 0) {
-            return -1;
+static int bus_contains_interval(Bus *bus, struct interval interval) {
+    int i, num_attachments;
+    int status = 0;
+    num_attachments = list_num_elements(bus->attachments);
+    for (i = 0; i < num_attachments; ++i) {
+        struct bus_attachment *cur_attachment;
+        cur_attachment = list_get(bus->attachments, i);
+        if (cur_attachment->range.low > interval.high) {
+            break;
+        }
+        if (intervals_overlap(cur_attachment->range, interval)) {
+            status = 1;
+            break;
         }
     }
-    attachment = &bus->attachments[bus->num_attachments++];
-    attachment->range = *interval;
-    attachment->read = read;
-    attachment->write = write;
-    qsort(bus->attachments, bus->num_attachments, sizeof(struct bus_attachment), attachment_comparator);
-    for (i = interval->low; i <= interval->high; ++i) {
+    return status;
+}
+
+static int bus_add_attachment(Bus *bus, struct device *device, struct interval interval) {
+    struct bus_attachment attachment;
+    int i;
+    if (bus_contains_interval(bus, interval)) {
+        errno = EINVAL;
+        return -1;
+    }
+    attachment.range = interval;
+    attachment.device = device;
+    if (list_add(bus->attachments, &attachment) < 0) {
+        return -1;
+    }
+    list_sort(bus->attachments, attachment_comparator);
+    for (i = interval.low; i <= interval.high; ++i) {
         bus->memory[i].attachment_flag = 1;
     }
     return 0;
-}
 
-static int intervals_overlap(struct interval *interval1, struct interval *interval2) {
-    return (interval2->low <= interval1->high) && (interval2->high >= interval1->low);
-}
-
-static int bus_contains_interval(Bus *bus, struct interval *interval) {
-    size_t i;
-    for (i = 0; i < bus->num_attachments; ++i) {
-        struct bus_attachment *cur_attachment;
-        cur_attachment = &bus->attachments[i];
-        if (intervals_overlap(&cur_attachment->range, interval)) {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 static void bus_remove_attachment(Bus *bus, struct device *device) {
 
 }
 
-static int bus_add_atachment_seperate(Bus *bus, struct device *device) {
-    uint16_t *addresses;
+static int bus_add_attachment_seperate(Bus *bus, struct device *device) {
+    const uint16_t *addresses;
     size_t num_addresses, i;
     addresses = device->get_addresses(device, &num_addresses);
     for (i = 0; i < num_addresses; ++i) {
-        if (bus_add_attachment(bus, device, addresses[i], addresses[i]) < 0) {
+        struct interval interval;
+        interval.low = addresses[i];
+        interval.high = addresses[i];
+        if (bus_add_attachment(bus, device, interval) < 0) {
             bus_remove_attachment(bus, device);
             return -1;
         }
@@ -158,39 +140,42 @@ static int bus_add_atachment_seperate(Bus *bus, struct device *device) {
     return 0;
 }
 
-int bus_attach(Bus *bus, struct device *device) {
+static int bus_add_attachment_range(Bus *bus, struct device *device) {
+    const uint16_t *addresses;
     size_t num_addresses;
+    struct interval interval;
+    addresses = device->get_addresses(device, &num_addresses);
+    interval.low = addresses[0];
+    interval.high = addresses[1];
+    return bus_add_attachment(bus, device, interval);
+}
+
+int bus_attach(Bus *bus, struct device *device) {
+    int status = -1;
     switch (device->get_address_method(device)) {
     case RANGE:
-        return bus_add_attachment(bus, device, device->get_addresses(device, &num_addresses)[0], device->get_addresses(device, &num_addresses)[1]);
+        status = bus_add_attachment_range(bus, device);
+        break;
     case SEPERATE:
-        return bus_add_attachment_seperate(bus, device);
+        status = bus_add_attachment_seperate(bus, device);
+        break;        
     }
+    return status;
 }
 
-int bus_attach(Bus *bus, uint16_t (*read)(uint16_t), void (*write)(uint16_t, uint16_t), uint16_t low, uint16_t high) {
-    struct interval interval;
-    interval.high = high;
-    interval.low = low;
-    if (interval.high >= BUS_NUM_ADDRESSES || bus_contains_interval(bus, &interval)) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (bus_add_attachment(bus, read, write, &interval) < 0) {
-        return -1;
-    }
-    return 0;
-}
-
-static struct bus_attachment *bus_point_search(Bus *bus, uint16_t point) {
-    return bsearch(&point, bus->attachments, bus->num_attachments, sizeof(struct bus_attachment), bsearch_attachment_comparator);
+static struct bus_attachment *bus_search(Bus *bus, uint16_t address) {
+    return list_bsearch(bus->attachments, &address, bsearch_attachment_comparator);
 }
 
 void bus_print(Bus *bus) {
-    size_t i;
-    for (i = 0; i < bus->num_attachments; ++i) {
-        printf("LOW: %u, HIGH: %u\n", bus->attachments[i].range.low, bus->attachments[i].range.high);
+    size_t num_attachments, i;
+    num_attachments = list_num_elements(bus->attachments);
+    for (i = 0; i < num_attachments; ++i) {
+        struct bus_attachment *cur_attachment;
+        cur_attachment = list_get(bus->attachments, i);
+        printf("LOW: %u, HIGH: %u\n", cur_attachment->range.low, cur_attachment->range.high);
     }
+
 }
 
 uint16_t bus_read_memory(Bus *bus, uint16_t address) {
@@ -199,23 +184,26 @@ uint16_t bus_read_memory(Bus *bus, uint16_t address) {
 
 uint16_t bus_read(Bus *bus, uint16_t address) {
     struct mem *mem_val;
+    uint16_t value;
     mem_val = &bus->memory[address];
     if (mem_val->attachment_flag) {
         struct bus_attachment *attachment;
-        /* Will never be null */
-        attachment = bus_point_search(bus, address);
-        mem_val->value = attachment->read(address);
+        attachment = bus_search(bus, address);
+        value = attachment->device->read_register(attachment->device, address);
+    } else {
+        value = mem_val->value;
     }
-    return mem_val->value;
+    return value;
 }
 
 void bus_write(Bus *bus, uint16_t address, uint16_t value) {
     struct mem *mem_val;
     mem_val = &bus->memory[address];
-    mem_val->value = value;
     if (mem_val->attachment_flag) {
         struct bus_attachment *attachment;
-        attachment = bus_point_search(bus, address);
-        attachment->write(address, mem_val->value);
+        attachment = bus_search(bus, address);
+        attachment->device->write_register(attachment->device, address, value);
+    } else {
+        mem_val->value = value;
     }
 }

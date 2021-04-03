@@ -9,10 +9,17 @@ static void termios_atexit(void) {
    tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_termios);
 }
 
+void reset_terminal(void) {
+   termios_atexit();
+}
+
 int init_terminal(void) {
    int err;
    struct termios buf;
- 
+
+   if (!isatty(STDIN_FILENO)) {
+      return 0;
+   }
    if (tcgetattr(STDIN_FILENO, &buf) < 0) {
       return -1;
    }

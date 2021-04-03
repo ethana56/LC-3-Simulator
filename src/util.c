@@ -21,17 +21,30 @@ size_t read_convert_16bits(uint16_t *dest, size_t amt, FILE *file) {
    return i;
 }
 
+int set_blocking(int fd) {
+   int old_status, new_status;
+   old_status = fcntl(fd, F_GETFL, 0);
+   if (old_status < 0) {
+      return -1;
+   }
+   new_status = fcntl(fd, F_SETFL, old_status & ~O_NONBLOCK);
+   if (new_status < 0) {
+      return -1;
+   }
+   return old_status;
+}
+
 int set_nonblock(int fd) {
-   int status;
-   status = fcntl(fd, F_GETFL, 0);
-   if (status == -1) {
+   int old_status, new_status;
+   old_status = fcntl(fd, F_GETFL, 0);
+   if (old_status < 0) {
       return -1;
    }
-   status = fcntl(fd, F_SETFL, status | O_NONBLOCK);
-   if (status == -1) {
+   new_status = fcntl(fd, F_SETFL, old_status | O_NONBLOCK);
+   if (new_status < 0) {
       return -1;
    }
-   return 0;
+   return old_status;
 }
 
 size_t safe_strcat(char *dest, char *src, size_t dest_len) {

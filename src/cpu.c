@@ -327,7 +327,7 @@ static void execute_interrupt(Cpu *cpu, uint8_t vec_location, uint8_t priority) 
    cpu->pc = cpu->bus_access->read(cpu->bus_access, INTERRUPT_VECTOR_TABLE | vec_location);
 }
 
-static void execute_exception(Cpu *cpu, uint8_t vec_location) {
+/*static void execute_exception(Cpu *cpu, uint8_t vec_location) {
    uint16_t priority = 0x0007 & (cpu->psr >> 8);
    if (SUPERVISOR_BIT(cpu->psr)) {
       cpu->saved.usp = cpu->registers[r6];
@@ -339,7 +339,7 @@ static void execute_exception(Cpu *cpu, uint8_t vec_location) {
    cpu->psr |= INIT_PSR_MASK_SUPERVISOR;
    cpu->psr |= (priority << 8);
    cpu->pc = cpu->bus_access->read(cpu->bus_access, INTERRUPT_VECTOR_TABLE | vec_location);
-}
+}*/
 
 static int interrupt_comparator(uint8_t psr_priority, uint8_t inter_priority) {
    return inter_priority > psr_priority;
@@ -413,9 +413,7 @@ void cpu_execute_until_end(Cpu *cpu) {
    instru_func func;
    int opcode;
    uint16_t instruction;
-   unsigned long long cycles = 0;
    while (CLOCK_ENABLED(cpu->bus_access->read(cpu->bus_access, MCR_ADDR))) {
-      printf("cycles: %llu\n", cycles);
       instruction = cpu->bus_access->read(cpu->bus_access, cpu->pc++);
       opcode = OPCODE(instruction);
       if (opcode > 15 || opcode == 13) {
@@ -426,6 +424,5 @@ void cpu_execute_until_end(Cpu *cpu) {
       }
       check_interrupts_and_exceptions(cpu);
       if (cpu->on_tick != NULL) cpu->on_tick(cpu->on_tick_data);
-      ++cycles;
    }
 }

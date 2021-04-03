@@ -8,6 +8,7 @@ struct list {
     size_t data_size;
     size_t num_elements;
     size_t capacity;
+
     double expand_mult;
 };
 
@@ -52,12 +53,31 @@ int list_add(List *list, void *data) {
     return 0;
 }
 
-void *list_to_array_no_cpy(List *list, size_t *num_elements) {
-    *num_elements = list->num_elements;
-    return list->capacity;
+void *list_get(List *list, size_t index) {
+    if (index >= list->num_elements) {
+        return NULL;
+    }
+    return (char *)list->data + (list->data_size * index);
 }
 
-void *convert_to_array(List *list, size_t *num_elements) {
+void list_sort(List *list, int (*comparator)(const void *, const void *)) {
+    qsort(list->data, list->num_elements, list->data_size, comparator);
+}
+
+void *list_bsearch(List *list, void *key, int (*comparator)(const void *, const void *)) {
+    return bsearch(key, list->data, list->num_elements, list->data_size, comparator);
+}
+
+void *list_to_array_no_cpy(List *list, size_t *num_elements) {
+    *num_elements = list->num_elements;
+    return list->data;
+}
+
+size_t list_num_elements(List *list) {
+    return list->num_elements;
+}
+
+void *list_convert_to_array(List *list, size_t *num_elements) {
     void *array;
     *num_elements = list->num_elements;
     if (list->num_elements == 0) {
@@ -71,6 +91,10 @@ void *convert_to_array(List *list, size_t *num_elements) {
     }
     free(list);
     return array;
+}
+
+void list_compact(List *list) {
+
 }
 
 void list_free(List *list) {

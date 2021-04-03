@@ -10,11 +10,11 @@
 #include <dirent.h>
 
 #include "util.h"
-#include "input_output.h"
 #include "plugin_manager.h"
 #include "terminal.h"
 #include "simulator.h"
 #include "list.h"
+#include "device_io_impl.h"
 
 #ifdef __linux__
 #define EXTENSION "so"
@@ -27,16 +27,13 @@
 
 struct ui {
     Simulator *simulator;
-    struct device_plugin_data **plugins, **on_input_plugins, **on_tick_plugins;
-    size_t num_plugins, num_on_input_plugins, num_on_tick_plugins;
-    struct host host;
+    List *device_plugins;
+    struct device_io *device_io_impl;
 };
-
 
 enum command_option {RUN, INVALID};
 
 static int get_user_input(char *buffer, size_t buffer_size) {
-    size_t str_len;
     printf("command> ");
     fflush(stdout);
     if (fgets(buffer, buffer_size, stdin) == NULL) {
@@ -72,26 +69,14 @@ static int load_program(struct ui *user_interface, char *program_name) {
     return 0;
 }
 
-static int prepare_terminal(void) {
-    if (set_nonblock(STDIN_FILENO) < 0 || set_nonblock(STDOUT_FILENO)) {
-        /* TODO: REVERT STDIN_FILENO TO BLOCKING IF SET_NONBLOCK(STDOUT_FILENO) FAILS */
-        return -1;
-    }
-    if (init_terminal() < 0) {
-        return -1;
-    }
-    return 0;
-}
-
 static int ui_loop(struct ui *user_interface) {
     char input[100];
     for (;;) {
         if (get_user_input(input, sizeof(input)) < 0) return -1;
         if (strcmp(input, "run") == 0) {
-            if (prepare_terminal() < 0) {
+            if (simulator_run_until_end(user_interface->simulator) < 0) {
                 return -1;
             }
-            simulator_run_until_end(user_interface->simulator);
             return 0;
         }
         if (load_program(user_interface, input) < 0) {
@@ -110,78 +95,17 @@ static void err_exit(char *msg) {
     exit(EXIT_FAILURE);
 }
 
-static int attach_plugins(struct ui *user_interface) {
-    size_t i;
-    int status = 0;
-    for (i = 0; i < user_interface->num_plugins && status >= 0; ++i) {
-        struct device_plugin *cur_plugin;
-        uint16_t *addresses;
-        size_t num_addresses;
-        uint16_t (*read_register)(uint16_t);
-        void (*write_register)(uint16_t, uint16_t);
-        cur_plugin = user_interface->plugins[i]->plugin;
-        addresses = cur_plugin->addresses;
-        num_addresses = cur_plugin->num_addresses;
-        read_register = cur_plugin->read_register;
-        write_register = cur_plugin->write_register;
-        
-        switch (cur_plugin->method) {
-        case RANGE:
-            status = simulator_bind_addresses_range(user_interface->simulator, addresses[0], addresses[1], read_register, write_register);
-            break;
-        case SEPERATE:
-            status = simulator_bind_addresses(user_interface->simulator, addresses, num_addresses, read_register, write_register);        
-        }
-    }
-    if (status < 0) {
-        simulator_unbind_all_addresses(user_interface->simulator);
-    }
-    return status;
-}
-
-static void on_tick(void *data) {
-    struct ui *user_interface;
-    ssize_t result;
-    size_t i;
-    char input;
-    user_interface = data;
-    result = read(STDIN_FILENO, &input, 1);
-    if (result < 0) {
-        if (errno == EWOULDBLOCK || errno == EAGAIN) {
-            return;
-        }
-        fprintf(stderr, "error reading input\n");
-    }
-    for (i = 0; i < user_interface->num_on_input_plugins; ++i) {
-        user_interface->on_input_plugins[i]->plugin->on_input(input);
-    }
-    for (i = 0; i < user_interface->num_on_tick_plugins; ++i) {
-        user_interface->on_tick_plugins[i]->plugin->on_tick();
-    }
-}
-
-static void write_output(struct host *host, char output) {
-    safe_write(STDOUT_FILENO, &output, 1);
-}
-
-static void alert_interrupt(struct host *host, uint8_t vec, uint8_t priority) {
-
-}
-
-static void subscribe_simulator_events(struct ui *user_interface) {
-    Simulator *simulator;
-    simulator = user_interface->simulator;
-    simulator_subscribe_on_tick(simulator, on_tick, user_interface);
-}
-
-static int attach_devices(struct ui *user_interface, struct device **devices, size_t num_devices) {
-    size_t i;
+static int attach_devices(struct ui *user_interface) {
+    List *devices;
+    size_t i, num_devices;
+    devices = user_interface->device_plugins;
+    num_devices = list_num_elements(devices);
     for (i = 0; i < num_devices; ++i) {
-        struct device *cur_device;
-        cur_device = devices[i];
-        if (simulator_attach_device(user_interface->simulator, cur_device) < 0) {
+        struct device_data *data;
+        data = list_get(devices, i);
+        if (simulator_attach_device(user_interface->simulator, data->device) < 0) {
             if (errno == EINVAL) {
-                fprintf(stderr, "(device plugin path here) address map conflicts with another\n");
+                fprintf(stderr, "(device plugin path here) address map conficts with another\n");
                 continue;
             }
             return -1;
@@ -190,38 +114,40 @@ static int attach_devices(struct ui *user_interface, struct device **devices, si
     return 0;
 }
 
+
 void start(void) {
     struct ui user_interface;
     char load_devices_err_str[PM_ERROR_STR_SIZ];
 
-    user_interface.simulator = simulator_new();
-    if (user_interface.simulator == NULL) {
-        err_exit(strerror(errno));
-    }
-    user_interface.host.data = &user_interface;
-    user_interface.host.write_output = write_output;
-    user_interface.host.alert_interrupt = alert_interrupt;
-    user_interface.plugins = pm_load_device_plugins("../devices", EXTENSION, &user_interface.num_plugins, &user_interface.host, load_devices_err_str);
-    if (user_interface.plugins == NULL) {
-        simulator_free(user_interface.simulator);
+    user_interface.device_plugins = pm_load_device_plugins("./devices", EXTENSION, load_devices_err_str);
+    if (user_interface.device_plugins == NULL) {
+
         err_exit(load_devices_err_str);
     }
-    if (attach_plugins(&user_interface) < 0) {
-        simulator_free(user_interface.simulator);
-        pm_plugins_free(user_interface.plugins, user_interface.num_plugins);
+    user_interface.device_io_impl = create_device_io_impl(STDIN_FILENO, STDOUT_FILENO);
+    if (user_interface.device_io_impl == NULL) {
+        pm_plugins_free(user_interface.device_plugins);
         err_exit(strerror(errno));
     }
-    if (check_plugin_subscriptions(&user_interface) < 0) {
-        simulator_free(user_interface.simulator);
-        pm_plugins_free(user_interface.plugins, user_interface.num_plugins);
+    user_interface.simulator = simulator_new(user_interface.device_io_impl);
+    if (user_interface.simulator == NULL) {
+        free_io_impl(user_interface.device_io_impl);
+        pm_plugins_free(user_interface.device_plugins);
         err_exit(strerror(errno));
     }
-    subscribe_simulator_events(&user_interface);
+    if (attach_devices(&user_interface) < 0) {
+        simulator_free(user_interface.simulator);
+        pm_plugins_free(user_interface.device_plugins);
+        free_io_impl(user_interface.device_io_impl);
+        err_exit(strerror(errno));
+    }
     if (ui_loop(&user_interface) < 0) {
-        simulator_free(user_interface.simulator);
-        pm_plugins_free(user_interface.plugins, user_interface.num_plugins);
-        err_exit(strerror(errno));
+        perror("ui loop");
+        exit(EXIT_FAILURE);
     }
+    free_io_impl(user_interface.device_io_impl);
+    pm_plugins_free(user_interface.device_plugins);
+    simulator_free(user_interface.simulator);
 }
 
 
