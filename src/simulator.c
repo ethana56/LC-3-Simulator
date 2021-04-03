@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <pthread.h>
 
+#include <stdio.h>
+
 #include "cpu.h"
 #include "interrupt_controller.h"
 #include "bus.h"
@@ -111,6 +113,7 @@ int simulator_load_program(Simulator *simulator, int (*callback)(void *, uint16_
     if (callback_result < 1) {
         return callback_result;
     }
+    printf("STARTING ADDR: %X\n", starting_address);
     cur_address = starting_address;
     while ((callback_result = callback(data, &cur_word)) > 0) {
         bus_write(simulator->bus, cur_address, cur_word);

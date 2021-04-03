@@ -71,9 +71,8 @@ static int bsearch_attachment_comparator(const void *key, const void *element) {
         result = 0;
     } else if (point < range->low) {
         result = -1;
-    } else if (point > range->high) {
-        result = 1;
-    }
+    }    
+    result = 1;    
     return result;
 }
 

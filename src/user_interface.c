@@ -52,6 +52,7 @@ static int program_reader(void *data, uint16_t *program_word) {
     } else if (result == 0) {
         return 0;
     }
+    
     *program_word = ntohs(*program_word);
     return result;
 }

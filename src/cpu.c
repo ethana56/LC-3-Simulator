@@ -413,6 +413,7 @@ void cpu_execute_until_end(Cpu *cpu) {
    instru_func func;
    int opcode;
    uint16_t instruction;
+   printf("starting pc: %X\n", cpu->pc);
    while (CLOCK_ENABLED(cpu->bus_access->read(cpu->bus_access, MCR_ADDR))) {
       instruction = cpu->bus_access->read(cpu->bus_access, cpu->pc++);
       opcode = OPCODE(instruction);
