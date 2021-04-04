@@ -67,15 +67,14 @@ static int bsearch_attachment_comparator(const void *key, const void *element) {
     point = *(const uint16_t *)key;
     attachment = element;
     range = &attachment->range;
-    if (point >= range->low && point <= range->high) {
-        result = 0;
-    } else if (point < range->low) {
+    result = 0;
+    if (point < range->low) {
         result = -1;
-    }    
-    result = 1;    
+    } else if (point > range->high) {
+        result = 1;
+    }  
     return result;
 }
-
 
 static int intervals_overlap(struct interval interval1, struct interval interval2) {
     return (interval2.low <= interval1.high) && (interval2.high >= interval1.low);
