@@ -24,6 +24,7 @@
 #endif
 
 #define INITIAL_PROGRAM_BUF_LEN 50
+#define MAX_COMMAND_STR_SIZE 100
 
 struct ui {
     Simulator *simulator;
@@ -31,19 +32,41 @@ struct ui {
     struct device_io *device_io_impl;
 };
 
+enum ui_status {CONTINUE, DONE, ERROR};
+
+typedef enum ui_status (*command_func)(struct ui *, List *);
+
+struct command {
+    char *command_str;
+    command_func func;
+};
+
+static enum ui_status ui_help(struct ui *, List *);
+static enum ui_status ui_run(struct ui *, List *);
+static enum ui_status ui_mem(struct ui *, List *);
+
+/* static const char *os_filename = "os.obj"; */
+
+static const char *help_string = "help - print this message\nrun all = run entire program\n"
+                                  "read mem [address], [address] - display all mem between the two addresses\n"
+                                  "read mem [address] - read mem at address\n"
+                                  "write mem [address] - write mem at address";
+
+static const struct command commands[] = {{"help", ui_help}, {"run", ui_run}, {"mem", ui_mem}}; 
+static const int num_commands = 3;                                
+
 enum command_option {RUN, INVALID};
 
-static int get_user_input(char *buffer, size_t buffer_size) {
-    printf("command> ");
+static int get_user_input(char *buffer) {
+    printf("command>");
     fflush(stdout);
-    if (fgets(buffer, buffer_size, stdin) == NULL) {
+    if (fgets(buffer, MAX_COMMAND_STR_SIZE, stdin) == NULL) {
         return -1;
     }
-    buffer[strcspn(buffer, "\n")] = '\0';
     return 0;
 }
 
-static int program_reader(void *data, uint16_t *program_word) {
+/*static int program_reader(void *data, uint16_t *program_word) {
     FILE *program_file = data;
     int result;
     result = fread(program_word, sizeof(uint16_t), 1, program_file);
@@ -55,9 +78,9 @@ static int program_reader(void *data, uint16_t *program_word) {
     
     *program_word = ntohs(*program_word);
     return result;
-}
+}*/
 
-static int load_program(struct ui *user_interface, char *program_name) {
+/* static int load_program(struct ui *user_interface, char *program_name) {
     FILE *program;
     program = fopen(program_name, "r");
     if (program == NULL) {
@@ -68,26 +91,97 @@ static int load_program(struct ui *user_interface, char *program_name) {
     }
     fclose(program);
     return 0;
+} */
+
+static enum ui_status ui_help(struct ui *user_interface, List *input_tokens) {
+    printf("%s\n", help_string);
+    return CONTINUE;
+}
+
+static enum ui_status ui_run(struct ui *user_interface, List *input_tokens) {
+    if (list_num_elements(input_tokens) == 1) {
+        if (simulator_run_until_end(user_interface->simulator) < 0) {
+            return ERROR;
+        }
+    }
+    return CONTINUE;
+}
+
+static enum ui_status ui_mem(struct ui *user_interface, List *input_tokens) {
+    return 0;
+}
+
+static int tokenize_input(char *input, List *tokens) {
+    char *context;
+    char *token;
+    while ((token = strtok_r(input, " ,\n", &context)) != NULL) {
+        if (list_add(tokens, token) < 0) {
+            return -1;
+        }
+        input = NULL;
+    }
+    return 0;
+}
+
+static command_func get_command_func(char const *command) {
+    command_func func;
+    int i;
+    func = NULL;
+    for (i = 0; i < num_commands; ++i) {
+        struct command const *cur_command;
+        cur_command = &commands[i];
+        if (strcmp(cur_command->command_str, command) == 0) {
+            func = cur_command->func;
+            break;
+        }
+    }
+    return func;
+}
+
+static enum ui_status execute_command(struct ui *user_interface, List *input_tokens) {
+    char const *command;
+    command_func func;
+    if (list_num_elements(input_tokens) == 0) {
+        return CONTINUE;
+    }
+    command = *(char ** const)list_get(input_tokens, 0);
+    func = get_command_func(command);
+    if (func == NULL) {
+        printf("%s: invalid command\n", command);
+        return CONTINUE;
+    }
+    return func(user_interface, input_tokens);
 }
 
 static int ui_loop(struct ui *user_interface) {
-    char input[100];
+    char input[MAX_COMMAND_STR_SIZE + 1];
+    List *input_tokens;
+    input_tokens = list_new(sizeof(char *), 5, 1);
+    if (input_tokens == NULL) {
+        return -1;
+    }
     for (;;) {
-        if (get_user_input(input, sizeof(input)) < 0) return -1;
-        if (strcmp(input, "run") == 0) {
-            if (simulator_run_until_end(user_interface->simulator) < 0) {
-                return -1;
-            }
-            return 0;
+        enum ui_status status;
+        if (get_user_input(input) < 0) {
+            goto err;
         }
-        if (load_program(user_interface, input) < 0) {
-            if (errno == ENOENT) {
-                fprintf(stderr, "%s: %s\n", input, strerror(errno));
-                continue;
-            }
+        if (tokenize_input(input, input_tokens) < 0) {
+            goto err;
+        }
+        status = execute_command(user_interface, input_tokens);
+        if (status == DONE) {
+            break;
+        }
+        if (status == ERROR) {
             return -1;
         }
     }
+    list_free(input_tokens);
+    return 0;
+
+err:
+    list_free(input_tokens);
+    return -1;    
 }
 
 static void err_exit(char *msg) {
@@ -116,7 +210,7 @@ static int attach_devices(struct ui *user_interface) {
 }
 
 
-void start(void) {
+int start(char *executable_path) {
     struct ui user_interface;
     char load_devices_err_str[PM_ERROR_STR_SIZ];
 
@@ -149,6 +243,7 @@ void start(void) {
     free_io_impl(user_interface.device_io_impl);
     pm_plugins_free(user_interface.device_plugins);
     simulator_free(user_interface.simulator);
+    return 0;
 }
 
 

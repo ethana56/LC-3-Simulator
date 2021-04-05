@@ -9,6 +9,6 @@ int main(int argc, char **argv) {
         exit(1);
     }
     exit(0);*/
-    start();
+    start(argv[0]);
     return 0;
 }

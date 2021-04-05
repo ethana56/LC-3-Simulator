@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <pthread.h>
 
 #include "interrupt_controller.h"
 
@@ -11,7 +10,6 @@ struct interrupt_controller {
     uint8_t interrupts[UINT8_MAX];
     uint8_t queue_heap[UINT8_MAX];
     int queue_heap_size;
-    pthread_mutex_t lock;
 };
 
 InterruptController *interrupt_controller_new(void) {
@@ -19,10 +17,6 @@ InterruptController *interrupt_controller_new(void) {
     int i;
     inter_cont = malloc(sizeof(InterruptController));
     if (inter_cont == NULL) {
-        return NULL;
-    }
-    if (pthread_mutex_init(&inter_cont->lock, NULL) < 0) {
-        free(inter_cont);
         return NULL;
     }
     for (i = 0; i < UINT8_MAX; ++i) {
@@ -33,7 +27,6 @@ InterruptController *interrupt_controller_new(void) {
 }
 
 void interrupt_controller_free(InterruptController *inter_cont) {
-    pthread_mutex_destroy(&inter_cont->lock);
     free(inter_cont);
 }
 
@@ -179,18 +172,15 @@ static uint8_t interrupt_queue_peek(InterruptController *inter_cont) {
 }
 
 void interrupt_controller_alert(InterruptController *inter_cont, uint8_t vec, uint8_t priority) {
-    pthread_mutex_lock(&inter_cont->lock);
     if (inter_cont->interrupts[vec] == IMPOSSIBLE_PRIORITY) {
         inter_cont->interrupts[vec] = priority;
         interrupt_queue_enqueue(inter_cont, vec);
     }
-    pthread_mutex_unlock(&inter_cont->lock);
 }
 
 int interrupt_controller_check(InterruptController *inter_cont, uint8_t cmp_priority, uint8_t *vec, uint8_t *priority, int (*comparator)(uint8_t, uint8_t)) {
     int result;
     result = 0;
-    pthread_mutex_lock(&inter_cont->lock);
     if (inter_cont->queue_heap_size > 0) {
         uint8_t vec_local, priority_local;
         vec_local = interrupt_queue_peek(inter_cont);
@@ -201,7 +191,6 @@ int interrupt_controller_check(InterruptController *inter_cont, uint8_t cmp_prio
             *priority = priority_local;
         }
     }
-    pthread_mutex_unlock(&inter_cont->lock);
     return result;
 }
 

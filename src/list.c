@@ -8,7 +8,6 @@ struct list {
     size_t data_size;
     size_t num_elements;
     size_t capacity;
-
     double expand_mult;
 };
 
@@ -53,7 +52,7 @@ int list_add(List *list, void *data) {
     return 0;
 }
 
-void *list_get(List *list, size_t index) {
+void * const list_get(List *list, size_t index) {
     if (index >= list->num_elements) {
         return NULL;
     }
@@ -64,12 +63,11 @@ void list_sort(List *list, int (*comparator)(const void *, const void *)) {
     qsort(list->data, list->num_elements, list->data_size, comparator);
 }
 
-void *list_bsearch(List *list, void *key, int (*comparator)(const void *, const void *)) {
+void *list_bsearch(List *list, void const * key, int (*comparator)(const void *, const void *)) {
     return bsearch(key, list->data, list->num_elements, list->data_size, comparator);
 }
 
-void *list_to_array_no_cpy(List *list, size_t *num_elements) {
-    *num_elements = list->num_elements;
+void *list_get_array(List *list) {
     return list->data;
 }
 
