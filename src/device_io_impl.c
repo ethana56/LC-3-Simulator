@@ -75,6 +75,7 @@ static int io_impl_end(struct device_io *io) {
     if (outfd_old_status < 0) {
         goto set_outfd_err;
     }
+    reset_terminal();
     /* TODO: Reset terminal */
     return 0;
 set_outfd_err:

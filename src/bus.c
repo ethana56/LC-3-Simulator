@@ -176,6 +176,10 @@ void bus_print(Bus *bus) {
 
 }
 
+int bus_is_device_register(Bus *bus, uint16_t address) {
+    return bus->memory[address].attachment_flag;
+}
+
 uint16_t bus_read_memory(Bus *bus, uint16_t address) {
     return bus->memory[address].value;
 }

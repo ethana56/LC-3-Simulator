@@ -52,7 +52,11 @@ int list_add(List *list, void *data) {
     return 0;
 }
 
-void * const list_get(List *list, size_t index) {
+void list_clear(List *list) {
+    list->num_elements = 0;
+}
+
+void *list_get(List *list, size_t index) {
     if (index >= list->num_elements) {
         return NULL;
     }

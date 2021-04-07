@@ -94,6 +94,17 @@ static void simulator_on_tick(void *data) {
     simulator_update_devices_on_tick(simulator);
 }
 
+enum simulator_address_status simulator_read_address(Simulator *simulator, uint16_t address, uint16_t *value) {
+    if (address < LOW_ADDRESS || address > HGIH_ADDRESS) {
+        return OUT_OF_BOUNDS;
+    }
+    if (bus_is_device_register(simulator->bus, address)) {
+        return DEVICE_REGISTER;
+    }
+    *value = bus_read_memory(simulator->bus, address);
+    return VALUE;
+}
+
 int simulator_run_until_end(Simulator *simulator) {
     if (simulator->device_io->start(simulator->device_io) < 0) {
         return -1;
@@ -113,7 +124,6 @@ int simulator_load_program(Simulator *simulator, int (*callback)(void *, uint16_
     if (callback_result < 1) {
         return callback_result;
     }
-    printf("STARTING ADDR: %X\n", starting_address);
     cur_address = starting_address;
     while ((callback_result = callback(data, &cur_word)) > 0) {
         bus_write(simulator->bus, cur_address, cur_word);

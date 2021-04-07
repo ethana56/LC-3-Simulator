@@ -44,18 +44,18 @@ struct command {
 static enum ui_status ui_help(struct ui *, List *);
 static enum ui_status ui_run(struct ui *, List *);
 static enum ui_status ui_mem(struct ui *, List *);
+static enum ui_status ui_load(struct ui *, List *);
 
 /* static const char *os_filename = "os.obj"; */
 
 static const char *help_string = "help - print this message\nrun all = run entire program\n"
                                   "read mem [address], [address] - display all mem between the two addresses\n"
                                   "read mem [address] - read mem at address\n"
-                                  "write mem [address] - write mem at address";
+                                  "write mem [address] - write mem at address\n"
+                                  "load [file] - load lc3 program";
 
-static const struct command commands[] = {{"help", ui_help}, {"run", ui_run}, {"mem", ui_mem}}; 
-static const int num_commands = 3;                                
-
-enum command_option {RUN, INVALID};
+static const struct command commands[] = {{"help", ui_help}, {"run", ui_run}, {"mem", ui_mem}, {"load", ui_load}}; 
+static const int num_commands = 4;
 
 static int get_user_input(char *buffer) {
     printf("command>");
@@ -66,7 +66,7 @@ static int get_user_input(char *buffer) {
     return 0;
 }
 
-/*static int program_reader(void *data, uint16_t *program_word) {
+static int program_reader(void *data, uint16_t *program_word) {
     FILE *program_file = data;
     int result;
     result = fread(program_word, sizeof(uint16_t), 1, program_file);
@@ -78,20 +78,16 @@ static int get_user_input(char *buffer) {
     
     *program_word = ntohs(*program_word);
     return result;
-}*/
+}
 
-/* static int load_program(struct ui *user_interface, char *program_name) {
-    FILE *program;
-    program = fopen(program_name, "r");
-    if (program == NULL) {
-        return -1;
+static char *ui_get_token(List *tokens, size_t index) {
+    void *token;
+    token = list_get(tokens, index);
+    if (token == NULL) {
+        return NULL;
     }
-    if (simulator_load_program(user_interface->simulator, program_reader, program) < 0) {
-        return -1;
-    }
-    fclose(program);
-    return 0;
-} */
+    return *(char **)token;
+}
 
 static enum ui_status ui_help(struct ui *user_interface, List *input_tokens) {
     printf("%s\n", help_string);
@@ -107,15 +103,103 @@ static enum ui_status ui_run(struct ui *user_interface, List *input_tokens) {
     return CONTINUE;
 }
 
+static enum ui_status ui_load(struct ui *user_interface, List *input_tokens) {
+    FILE *program_file;
+    char const *filename;
+    if (list_num_elements(input_tokens) < 2) {
+        printf("filename not specified.\nUsage: load [filename]\n");
+        return CONTINUE;
+    }
+    filename = *(char **)list_get(input_tokens, 1);
+    program_file = fopen(filename, "r");
+    if (program_file == NULL) {
+        if (errno == ENOMEM) {
+            return ERROR;
+        }
+        printf("%s: %s\n", filename, strerror(errno));
+        return CONTINUE;
+    }
+    if (simulator_load_program(user_interface->simulator, program_reader, program_file) < 0) {
+        printf("%s: %s\n", filename, strerror(errno));
+    }
+    fclose(program_file);
+    return CONTINUE;
+}
+
+static int convert_address_token(char *token, uint16_t *address) {
+    char *endptr;
+    long converted;
+    int base;
+    if (token == NULL) {
+        return 1;
+    }
+    if (token[0] == 'x' || token[1] == 'x') {
+        base = 16;
+    } else {
+        base = 10;
+    }
+    converted = strtol(token, &endptr, base);
+    if (endptr == token || *endptr != '\0') {
+        printf("%s contains invalid characters\n", token);
+        return 0;
+    }
+    if (converted < LOW_ADDRESS || converted > HGIH_ADDRESS) {
+        printf("%s is out of range. Must be between 0X%X and 0X%X\n", token, LOW_ADDRESS, HGIH_ADDRESS);
+        return 0;
+    }
+    *address = converted;
+    return 1; 
+}
+
+static int convert_addresses(List *input_tokens, uint16_t *low, uint16_t *high) {
+    char *token1, *token2;
+    int token1_status, token2_status;
+    if (list_num_elements(input_tokens) < 2 || list_num_elements(input_tokens) > 3) {
+        printf("mem: invalid number of arguments. Usage: mem [address] [address]\n");
+        return 0;
+    }
+    token1 = ui_get_token(input_tokens, 1);
+    token2 = ui_get_token(input_tokens, 2);
+    token1_status = token2_status = 1;
+    token1_status = convert_address_token(token1, low);
+    if (token2 != NULL) {
+        token2_status = convert_address_token(token2, high);
+    } else {
+        *high = *low;
+    }
+    if (!token1_status || !token2_status) {
+        return 0;
+    }
+    return 1;
+}
+
 static enum ui_status ui_mem(struct ui *user_interface, List *input_tokens) {
-    return 0;
+    uint16_t low, high;
+    uint16_t cur_address;
+    if (!convert_addresses(input_tokens, &low, &high)) {
+        return CONTINUE;
+    }
+    printf("%-13s  %-13s\n\n", "address", "value");
+    for (cur_address = low; cur_address <= high; ++cur_address) {
+        uint16_t cur_value;
+        enum simulator_address_status address_status;
+        address_status = simulator_read_address(user_interface->simulator, cur_address, &cur_value);
+        if (address_status == VALUE) {
+            printf("0X%04X: %04X\n", cur_address, cur_value);
+        } else if (address_status == DEVICE_REGISTER) {
+            printf("%04X: %13s\n", cur_address, "DEVICE");
+        } else if (address_status == OUT_OF_BOUNDS) {
+            printf("%04X: %13s\n", cur_address, "OUT OF BOUNDS");
+        }
+    }
+    return CONTINUE;
 }
 
 static int tokenize_input(char *input, List *tokens) {
     char *context;
     char *token;
     while ((token = strtok_r(input, " ,\n", &context)) != NULL) {
-        if (list_add(tokens, token) < 0) {
+        if (list_add(tokens, &token) < 0) {
             return -1;
         }
         input = NULL;
@@ -144,7 +228,7 @@ static enum ui_status execute_command(struct ui *user_interface, List *input_tok
     if (list_num_elements(input_tokens) == 0) {
         return CONTINUE;
     }
-    command = *(char ** const)list_get(input_tokens, 0);
+    command = *(char **)list_get(input_tokens, 0);
     func = get_command_func(command);
     if (func == NULL) {
         printf("%s: invalid command\n", command);
@@ -175,6 +259,7 @@ static int ui_loop(struct ui *user_interface) {
         if (status == ERROR) {
             return -1;
         }
+        list_clear(input_tokens);
     }
     list_free(input_tokens);
     return 0;
