@@ -26,6 +26,13 @@
 #define INITIAL_PROGRAM_BUF_LEN 50
 #define MAX_COMMAND_STR_SIZE 100
 
+#define UI_MEM_MODE_INDEX             1
+#define UI_MEM_WRITE_VALUE_INDEX      2
+#define UI_MEM_TOKEN1_READ_INDEX      2
+#define UI_MEM_TOKEN2_READ_INDEX      3
+#define UI_MEM_TOKEN1_WRITE_INDEX     3
+#define UI_MEM_TOKEN2_WRITE_INDEX     4
+
 struct ui {
     Simulator *simulator;
     List *device_plugins;
@@ -33,6 +40,7 @@ struct ui {
 };
 
 enum ui_status {CONTINUE, DONE, ERROR};
+enum ui_mem_mode {UI_MEM_READ, UI_MEM_WRITE};
 
 typedef enum ui_status (*command_func)(struct ui *, List *);
 
@@ -57,8 +65,12 @@ static const char *help_string = "help - print this message\nrun all = run entir
 static const struct command commands[] = {{"help", ui_help}, {"run", ui_run}, {"mem", ui_mem}, {"load", ui_load}}; 
 static const int num_commands = 4;
 
+static const char *mem_usage = "Usage: mem [read/write] [(if write) value] [address] [address]";
+static const char *MEM_WRITE_MODE_STR = "write";
+static const char *MEM_READ_MODE_STR  = "read";
+
 static int get_user_input(char *buffer) {
-    printf("command>");
+    printf("command> ");
     fflush(stdout);
     if (fgets(buffer, MAX_COMMAND_STR_SIZE, stdin) == NULL) {
         return -1;
@@ -128,38 +140,87 @@ static enum ui_status ui_load(struct ui *user_interface, List *input_tokens) {
 
 static int convert_address_token(char *token, uint16_t *address) {
     char *endptr;
-    long converted;
-    int base;
+    long long converted;
     if (token == NULL) {
         return 1;
     }
-    if (token[0] == 'x' || token[1] == 'x') {
-        base = 16;
-    } else {
-        base = 10;
-    }
-    converted = strtol(token, &endptr, base);
+    converted = string_to_ll_10_or_16(token, &endptr);
     if (endptr == token || *endptr != '\0') {
         printf("%s contains invalid characters\n", token);
         return 0;
     }
     if (converted < LOW_ADDRESS || converted > HGIH_ADDRESS) {
-        printf("%s is out of range. Must be between 0X%X and 0X%X\n", token, LOW_ADDRESS, HGIH_ADDRESS);
+        printf("%s is out of range. Must be between 0x%04X and 0x%04X\n", token, LOW_ADDRESS, HGIH_ADDRESS);
         return 0;
     }
     *address = converted;
     return 1; 
 }
 
-static int convert_addresses(List *input_tokens, uint16_t *low, uint16_t *high) {
-    char *token1, *token2;
-    int token1_status, token2_status;
-    if (list_num_elements(input_tokens) < 2 || list_num_elements(input_tokens) > 3) {
-        printf("mem: invalid number of arguments. Usage: mem [address] [address]\n");
+static void ui_mem_print(struct ui *user_interface, uint16_t low, uint16_t high) {
+    long cur_address;
+    printf("%-13s%-13s\n", "address", "value");
+    for (cur_address = low; cur_address <= high; ++cur_address) {
+        uint16_t cur_value;
+        enum simulator_address_status address_status;
+        char cur_address_str[7], cur_value_str[7];
+        address_status = simulator_read_address(user_interface->simulator, cur_address, &cur_value);
+        snprintf(cur_address_str, sizeof(cur_address_str), "0X%04lX", cur_address);
+        if (address_status == VALUE) {
+            snprintf(cur_value_str, sizeof(cur_value_str), "0X%04X", cur_value);
+            printf("%-13s%-13s\n", cur_address_str, cur_value_str);
+        } else if (address_status == DEVICE_REGISTER) {
+            printf("%-13s%-13s\n", cur_address_str, "DEVICE");
+        } else if (address_status == OUT_OF_BOUNDS) {
+            printf("%-13s%-13s\n", cur_address_str, "OUT OF BOUNDS");
+        }
+    }
+}
+
+static void ui_mem_write(struct ui *user_interface, uint16_t value, uint16_t low, uint16_t high) {
+    long cur_address;
+    for (cur_address = low; cur_address <= high; ++cur_address) {
+        simulator_write_address(user_interface->simulator, cur_address, value);
+    }
+}
+
+static int ui_mem_get_mode(List *input_tokens, enum ui_mem_mode *mode) {
+    char *mode_str;
+    int result;
+    if (list_num_elements(input_tokens) < 2) {
+        printf("mem: invalid args. %s\n", mem_usage);
         return 0;
     }
-    token1 = ui_get_token(input_tokens, 1);
-    token2 = ui_get_token(input_tokens, 2);
+    mode_str = ui_get_token(input_tokens, UI_MEM_MODE_INDEX);
+    result = 1;
+    if (strcmp(mode_str, MEM_READ_MODE_STR) == 0) {
+        *mode = UI_MEM_READ;
+    } else if (strcmp(mode_str, MEM_WRITE_MODE_STR) == 0) {
+        *mode = UI_MEM_WRITE;
+    } else {
+        printf("Mem: %s: invalid mode. %s\n", mode_str, mem_usage);
+        result = 0;
+    }
+    return result;
+}
+
+static int ui_mem_get_addresses(List *input_tokens, enum ui_mem_mode mode, uint16_t *low, uint16_t *high) {
+    char *token1, *token2;
+    int token1_status, token2_status;
+    size_t token1_index, token2_index;
+    if (mode == UI_MEM_READ) {
+        token1_index = UI_MEM_TOKEN1_READ_INDEX;
+        token2_index = UI_MEM_TOKEN2_READ_INDEX;
+    } else {
+        token1_index = UI_MEM_TOKEN1_WRITE_INDEX;
+        token2_index = UI_MEM_TOKEN2_WRITE_INDEX;
+    }
+    token1 = ui_get_token(input_tokens, token1_index);
+    if (token1 == NULL) {
+        printf("mem: invalid number of args\n");
+        return CONTINUE;
+    }
+    token2 = ui_get_token(input_tokens, token2_index);
     token1_status = token2_status = 1;
     token1_status = convert_address_token(token1, low);
     if (token2 != NULL) {
@@ -167,30 +228,44 @@ static int convert_addresses(List *input_tokens, uint16_t *low, uint16_t *high) 
     } else {
         *high = *low;
     }
-    if (!token1_status || !token2_status) {
+    return token1_status && token2_status;
+}
+
+static int ui_mem_get_write_value(List *input_tokens, uint16_t *write_value) {
+    char *token;
+    char *endptr;
+    long long converted;
+    token = ui_get_token(input_tokens, UI_MEM_WRITE_VALUE_INDEX);
+    converted = string_to_ll_10_or_16(token, &endptr);
+    if (endptr == token || *endptr != '\0') {
+        printf("Write value contains invalid characters\n");
         return 0;
     }
+    if (converted < 0 || converted > UINT16_MAX) {
+        printf("Write value out of range. Must be between 0X%04X and 0X%04X\n", 0, UINT16_MAX);
+        return 0;
+    }
+    *write_value = converted;
     return 1;
 }
 
 static enum ui_status ui_mem(struct ui *user_interface, List *input_tokens) {
     uint16_t low, high;
-    uint16_t cur_address;
-    if (!convert_addresses(input_tokens, &low, &high)) {
+    enum ui_mem_mode mode;
+    if (!ui_mem_get_mode(input_tokens, &mode)) {
         return CONTINUE;
     }
-    printf("%-13s  %-13s\n\n", "address", "value");
-    for (cur_address = low; cur_address <= high; ++cur_address) {
-        uint16_t cur_value;
-        enum simulator_address_status address_status;
-        address_status = simulator_read_address(user_interface->simulator, cur_address, &cur_value);
-        if (address_status == VALUE) {
-            printf("0X%04X: %04X\n", cur_address, cur_value);
-        } else if (address_status == DEVICE_REGISTER) {
-            printf("%04X: %13s\n", cur_address, "DEVICE");
-        } else if (address_status == OUT_OF_BOUNDS) {
-            printf("%04X: %13s\n", cur_address, "OUT OF BOUNDS");
+    if (!ui_mem_get_addresses(input_tokens, mode, &low, &high)) {
+        return CONTINUE;
+    }
+    if (mode == UI_MEM_READ) {
+        ui_mem_print(user_interface, low, high);
+    } else if (mode == UI_MEM_WRITE) {
+        uint16_t write_value;
+        if (!ui_mem_get_write_value(input_tokens, &write_value)) {
+            return CONTINUE;
         }
+        ui_mem_write(user_interface, write_value, low, high);
     }
     return CONTINUE;
 }

@@ -116,6 +116,10 @@ int simulator_run_until_end(Simulator *simulator) {
     return 0;
 }
 
+void simulator_write_address(Simulator *simulator, uint16_t address, uint16_t value) {
+    bus_write(simulator->bus, address, value);
+}
+
 int simulator_load_program(Simulator *simulator, int (*callback)(void *, uint16_t *), void *data) {
     int callback_result;
     uint16_t cur_address, starting_address;

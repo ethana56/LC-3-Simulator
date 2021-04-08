@@ -21,6 +21,7 @@ typedef struct simulator Simulator;
 
 enum simulator_address_status simulator_read_address(Simulator *, uint16_t, uint16_t *);
 int simulator_run_until_end(Simulator *);
+void simulator_write_address(Simulator *, uint16_t, uint16_t);
 int simulator_load_program(Simulator *, int (*)(void *, uint16_t *), void *);
 int simulator_attach_device(Simulator *, struct device *);
 int simulator_load_program(Simulator *, int (*)(void *, uint16_t *), void *);

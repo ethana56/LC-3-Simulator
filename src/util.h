@@ -10,6 +10,7 @@ int set_blocking(int fd);
 int set_nonblock(int fd);
 size_t safe_strcat(char *dest, char *src, size_t dest_len);
 char *safe_strncpy(char *dst, char *src, size_t len);
+long long string_to_ll_10_or_16(char *, char **);
 size_t safe_write(int fd, const void *buf, size_t amt);
 char *alloc_strcpy(const char *dst);
 #endif
