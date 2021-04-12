@@ -33,6 +33,8 @@
 #define UI_MEM_TOKEN1_WRITE_INDEX     3
 #define UI_MEM_TOKEN2_WRITE_INDEX     4
 
+#define UI_STEP_AMT_INDEX 1
+
 struct ui {
     Simulator *simulator;
     List *device_plugins;
@@ -41,6 +43,7 @@ struct ui {
 
 enum ui_status {CONTINUE, DONE, ERROR};
 enum ui_mem_mode {UI_MEM_READ, UI_MEM_WRITE};
+enum ui_mem_parse_state {MEM_PARSE_MODE, MEM_PARSE_VALUE, MEM_PARSE_ADDRESS1, MEM_PARSE_ADDRESS2};
 
 typedef enum ui_status (*command_func)(struct ui *, List *);
 
@@ -49,6 +52,7 @@ struct command {
     command_func func;
 };
 
+static enum ui_status ui_step(struct ui *, List *);
 static enum ui_status ui_help(struct ui *, List *);
 static enum ui_status ui_run(struct ui *, List *);
 static enum ui_status ui_mem(struct ui *, List *);
@@ -62,15 +66,15 @@ static const char *help_string = "help - print this message\nrun all = run entir
                                   "write mem [address] - write mem at address\n"
                                   "load [file] - load lc3 program";
 
-static const struct command commands[] = {{"help", ui_help}, {"run", ui_run}, {"mem", ui_mem}, {"load", ui_load}}; 
-static const int num_commands = 4;
+static const struct command commands[] = {{"step", ui_step}, {"help", ui_help}, {"run", ui_run}, {"mem", ui_mem}, {"load", ui_load}}; 
+static const int num_commands = 5;
 
 static const char *mem_usage = "Usage: mem [read/write] [(if write) value] [address] [address]";
 static const char *MEM_WRITE_MODE_STR = "write";
 static const char *MEM_READ_MODE_STR  = "read";
 
 static int get_user_input(char *buffer) {
-    printf("command> ");
+    printf("\ncommand> ");
     fflush(stdout);
     if (fgets(buffer, MAX_COMMAND_STR_SIZE, stdin) == NULL) {
         return -1;
@@ -268,6 +272,29 @@ static enum ui_status ui_mem(struct ui *user_interface, List *input_tokens) {
         ui_mem_write(user_interface, write_value, low, high);
     }
     return CONTINUE;
+}
+
+static enum ui_status ui_step(struct ui *user_interface, List *input_tokens) {
+    int step_status;
+    if (list_num_elements(input_tokens) < 2) {
+        step_status = simulator_step(user_interface->simulator, 1);
+    } else {
+        char *step_amt_token;
+        char *endptr;
+        long long converted;
+        step_amt_token = ui_get_token(input_tokens, UI_STEP_AMT_INDEX);
+        converted = string_to_ll_10_or_16(step_amt_token, &endptr);
+        if (endptr == step_amt_token || *endptr != '\0') {
+            printf("step: %s contains invalid characters\n", step_amt_token);
+            return CONTINUE;
+        }
+        if (converted < 0 || converted > UINT16_MAX) {
+            printf("step: %s is too large\n", step_amt_token);
+            return CONTINUE;
+        }
+        step_status = simulator_step(user_interface->simulator, converted);
+    }
+    return step_status < 0 ? ERROR : CONTINUE;
 }
 
 static int tokenize_input(char *input, List *tokens) {

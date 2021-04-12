@@ -1,8 +1,6 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <errno.h>
-#include <unistd.h>
-#include <pthread.h>
 
 #include <stdio.h>
 
@@ -16,7 +14,6 @@
 
 struct simulator {
     struct bus_accessor bus_accessor;
-    struct interrupt_checker inter_check;
     struct host host;
     Cpu *cpu;
     Bus *bus;
@@ -25,21 +22,6 @@ struct simulator {
     List *on_input_devices;
     List *on_tick_devices;
 };
-
-static int simulator_check_interrupt(
-    struct interrupt_checker *inter_check, 
-    uint8_t cmp_priority, 
-    uint8_t *vec, 
-    uint8_t *priority, 
-    int (*comparator)(uint8_t, uint8_t)
-) {
-    return interrupt_controller_check((InterruptController *)inter_check->data, cmp_priority, vec, priority, comparator);
-}
-
-static void init_interrupt_checker(InterruptController *inter_cont, struct interrupt_checker *inter_check) {
-    inter_check->data = inter_cont;
-    inter_check->check_interrupt = simulator_check_interrupt;
-}
 
 static uint16_t simulator_bus_read(struct bus_accessor *bus_access, uint16_t address) {
     return bus_read((Bus *)bus_access->data, address);
@@ -87,11 +69,14 @@ static void simulator_update_devices_on_tick(Simulator *simulator) {
     }
 }
 
-static void simulator_on_tick(void *data) {
-    Simulator *simulator;
-    simulator = data;
-    simulator_check_input(simulator);
-    simulator_update_devices_on_tick(simulator);
+static void simulator_check_interrupts(Simulator *simulator) {
+    uint8_t vec, priority;
+    if (!interrupt_controller_peek(simulator->inter_cont, &vec, &priority)) {
+        return;
+    }
+    if (cpu_signal_interrupt(simulator->cpu, vec, priority)) {
+        interrupt_controller_take(simulator->inter_cont);
+    }
 }
 
 enum simulator_address_status simulator_read_address(Simulator *simulator, uint16_t address, uint16_t *value) {
@@ -109,11 +94,28 @@ int simulator_run_until_end(Simulator *simulator) {
     if (simulator->device_io->start(simulator->device_io) < 0) {
         return -1;
     }
-    cpu_execute_until_end(simulator->cpu);
+    while (cpu_tick(simulator->cpu)) {
+        simulator_check_input(simulator);
+        simulator_update_devices_on_tick(simulator);
+        simulator_check_interrupts(simulator);
+    }
     if (simulator->device_io->end(simulator->device_io) < 0) {
         return -1;
     }
     return 0;
+}
+
+int simulator_step(Simulator *simulator, int amt) {
+    int tick_status;
+    int i;
+    if (simulator->device_io->start(simulator->device_io) < 0) {
+        return -1;
+    }
+    for (i = 0; i < amt && (tick_status = cpu_tick(simulator->cpu) != 0); ++i);
+    if (simulator->device_io->end(simulator->device_io) < 0) {
+        return -1;
+    }
+    return tick_status;
 }
 
 void simulator_write_address(Simulator *simulator, uint16_t address, uint16_t value) {
@@ -232,8 +234,7 @@ Simulator *simulator_new(struct device_io *device_io) {
         goto inter_cont_alloc_err;
     }
     init_bus_accessor(simulator->bus, &simulator->bus_accessor);
-    init_interrupt_checker(simulator->inter_cont, &simulator->inter_check);
-    simulator->cpu = new_Cpu(&simulator->bus_accessor, &simulator->inter_check);
+    simulator->cpu = new_Cpu(&simulator->bus_accessor);
     if (simulator->cpu == NULL) {
         goto cpu_alloc_err;
     }
@@ -241,7 +242,6 @@ Simulator *simulator_new(struct device_io *device_io) {
     simulator->device_io = device_io;
     simulator->on_input_devices = NULL;
     simulator->on_tick_devices = NULL;
-    cpu_subscribe_on_tick(simulator->cpu, simulator_on_tick, simulator);
     return simulator;
 
 cpu_alloc_err:

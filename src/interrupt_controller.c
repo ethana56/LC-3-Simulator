@@ -7,8 +7,8 @@
 #define IMPOSSIBLE_PRIORITY 255
 
 struct interrupt_controller {
-    uint8_t interrupts[UINT8_MAX];
-    uint8_t queue_heap[UINT8_MAX];
+    uint8_t interrupts[UINT8_MAX]; /* index is vector. Contains priorities */
+    uint8_t queue_heap[UINT8_MAX]; /* heap (binary tree )of vectors based on priorities in interrupts */
     int queue_heap_size;
 };
 
@@ -160,11 +160,11 @@ static void interrupt_queue_enqueue(InterruptController *inter_cont, uint8_t val
 
 /* Should only be called when inter_cont->queue_heap_size > 0 */
 static uint8_t interrupt_queue_dequeue(InterruptController *inter_cont) {
-    uint8_t value;
-    value = inter_cont->queue_heap[0];
+    uint8_t vec;
+    vec = inter_cont->queue_heap[0];
     inter_cont->queue_heap[0] = inter_cont->queue_heap[--inter_cont->queue_heap_size];
     interrupt_queue_percolate_down(inter_cont, 0);
-    return value;
+    return vec;
 }
 
 static uint8_t interrupt_queue_peek(InterruptController *inter_cont) {
@@ -178,20 +178,24 @@ void interrupt_controller_alert(InterruptController *inter_cont, uint8_t vec, ui
     }
 }
 
-int interrupt_controller_check(InterruptController *inter_cont, uint8_t cmp_priority, uint8_t *vec, uint8_t *priority, int (*comparator)(uint8_t, uint8_t)) {
+int interrupt_controller_peek(InterruptController *inter_cont, uint8_t *vec, uint8_t *priority) {
     int result;
     result = 0;
     if (inter_cont->queue_heap_size > 0) {
-        uint8_t vec_local, priority_local;
-        vec_local = interrupt_queue_peek(inter_cont);
-        priority_local = inter_cont->interrupts[vec_local];
-        if ((*comparator)(cmp_priority, priority_local)) {
-            result = 1;
-            *vec = interrupt_queue_dequeue(inter_cont);
-            *priority = priority_local;
-        }
+        *vec = interrupt_queue_peek(inter_cont);
+        *priority = inter_cont->interrupts[*vec];
+        result = 1;
     }
     return result;
+}
+
+void interrupt_controller_take(InterruptController *inter_cont) {
+    uint8_t vec;
+    if (inter_cont->queue_heap_size == 0) {
+        return;
+    }
+    vec = interrupt_queue_dequeue(inter_cont);
+    inter_cont->interrupts[vec] = IMPOSSIBLE_PRIORITY;
 }
 
 

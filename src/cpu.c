@@ -80,7 +80,6 @@ struct cpu_exception {
 
 struct cpu {
    struct bus_accessor *bus_access;
-   struct interrupt_checker *inter_check;
    void (*on_tick)(void *);
    void *on_tick_data;
    struct cpu_exception priv_mode_violation_exception_line;
@@ -94,25 +93,6 @@ struct cpu {
    } saved;
 };
 
-/*struct Cpu {
-   Memory *memory;
-   struct io_register *io_registers;
-   struct mcr {
-       struct io_register mcr_register;
-       uint16_t mcr_data;
-   } mcr;
-   struct interrupt_checker *inter_check;
-   struct cpu_exception priv_mode_violation_exception_line;
-   struct cpu_exception illegal_opcode_exception_line;
-   uint16_t registers[num_registers];
-   uint16_t pc;
-   uint16_t psr;
-   struct {
-      uint16_t usp;
-      uint16_t ssp;
-   } saved;
-};*/
-
 static instru_func instru_func_vec[16];
 static int instructions_loaded = 0;
 
@@ -124,14 +104,14 @@ static void setup_exceptions(Cpu *cpu) {
 }
 
 static void supervisor_stack_push(Cpu *cpu, uint16_t data) {
-   cpu->registers[r6] -= 1;
-   cpu->bus_access->write(cpu->bus_access, cpu->registers[r6], data);
+   cpu->registers[REG_R6] -= 1;
+   cpu->bus_access->write(cpu->bus_access, cpu->registers[REG_R6], data);
 }
 
 static uint16_t supervisor_stack_pop(Cpu *cpu) {
    uint16_t data;
-   data = cpu->bus_access->read(cpu->bus_access, cpu->registers[r6]);
-   cpu->registers[r6] += 1;
+   data = cpu->bus_access->read(cpu->bus_access, cpu->registers[REG_R6]);
+   cpu->registers[REG_R6] += 1;
    return data;
 }
 
@@ -146,7 +126,6 @@ static uint16_t sign_extend(uint16_t value, int num_bits) {
 
 static void set_condition_code(Cpu *cpu, int reg) {
    int16_t val = cpu->registers[reg];
-   //printf("VAL: %d\n\r", val);
    cpu->psr &= NZP_PSR_CLEAR_MASK;
    if (val > 0) {
       cpu->psr |= SET_PSR_P_MASK;
@@ -190,7 +169,7 @@ static void jmp_ret(Cpu *cpu, uint16_t instruction) {
 
 static void jsr_jsrr(Cpu *cpu, uint16_t instruction) {
    uint16_t new_pc;
-   cpu->registers[r7] = cpu->pc;
+   cpu->registers[REG_R7] = cpu->pc;
    if (IS_JSR(instruction)) {
       new_pc = cpu->pc + sign_extend(PCOFFSET11(instruction), 11);
    } else {
@@ -258,7 +237,7 @@ static void rti(Cpu *cpu, uint16_t instruction) {
    cpu->pc = supervisor_stack_pop(cpu);
    cpu->psr = supervisor_stack_pop(cpu);
    if (!SUPERVISOR_BIT(cpu->psr)) {
-      cpu->registers[r6] = cpu->saved.usp;
+      cpu->registers[REG_R6] = cpu->saved.usp;
    }
 }
 
@@ -285,7 +264,7 @@ static void trap(Cpu *cpu, uint16_t instruction) {
    if (trapvector > 0x00FF) {
       /* ERROR */
    }
-   cpu->registers[r7] = cpu->pc;
+   cpu->registers[REG_R7] = cpu->pc;
    cpu->pc = cpu->bus_access->read(cpu->bus_access, trapvector);
    /*psr &= 0x7FFF; mabye*/
 }
@@ -308,11 +287,11 @@ static void load_instructions(void) {
    instru_func_vec[TRAP]     = trap;
 }
 
-static void execute_interrupt(Cpu *cpu, uint8_t vec_location, uint8_t priority) {
+static void cpu_execute_interrupt(Cpu *cpu, uint8_t vec_location, uint8_t priority) {
    uint16_t priority_extended;
    if (SUPERVISOR_BIT(cpu->psr)) {
-      cpu->saved.usp = cpu->registers[r6];
-      cpu->registers[r6] = cpu->saved.ssp;
+      cpu->saved.usp = cpu->registers[REG_R6];
+      cpu->registers[REG_R6] = cpu->saved.ssp;
    }
    supervisor_stack_push(cpu, cpu->psr);
    supervisor_stack_push(cpu, cpu->pc);
@@ -327,11 +306,11 @@ static void execute_interrupt(Cpu *cpu, uint8_t vec_location, uint8_t priority) 
    cpu->pc = cpu->bus_access->read(cpu->bus_access, INTERRUPT_VECTOR_TABLE | vec_location);
 }
 
-/*static void execute_exception(Cpu *cpu, uint8_t vec_location) {
+static void cpu_execute_exception(Cpu *cpu, uint8_t vec_location) {
    uint16_t priority = 0x0007 & (cpu->psr >> 8);
    if (SUPERVISOR_BIT(cpu->psr)) {
-      cpu->saved.usp = cpu->registers[r6];
-      cpu->registers[r6] = cpu->saved.ssp;
+      cpu->saved.usp = cpu->registers[REG_R6];
+      cpu->registers[REG_R6] = cpu->saved.ssp;
    }
    supervisor_stack_push(cpu, cpu->psr);
    supervisor_stack_push(cpu, cpu->pc);
@@ -339,56 +318,37 @@ static void execute_interrupt(Cpu *cpu, uint8_t vec_location, uint8_t priority) 
    cpu->psr |= INIT_PSR_MASK_SUPERVISOR;
    cpu->psr |= (priority << 8);
    cpu->pc = cpu->bus_access->read(cpu->bus_access, INTERRUPT_VECTOR_TABLE | vec_location);
-}*/
-
-static int interrupt_comparator(uint8_t psr_priority, uint8_t inter_priority) {
-   return inter_priority > psr_priority;
 }
 
-static void check_interrupts_and_exceptions(Cpu *cpu) {
-   struct interrupt_checker *inter_check;
-   uint8_t vec, priority;
-   inter_check = cpu->inter_check;
-   //printf("check interrupts\n");
-   if (inter_check->check_interrupt(inter_check, PSR_PRIORITY(cpu->psr), &vec, &priority, interrupt_comparator)) {
-      execute_interrupt(cpu, vec, priority);
-   }
-}
-
-/*static void check_interrupts_and_exceptions(Cpu *cpu) {
-   int i, num_interrupt_lines;
-   struct io_interrupt_line *interrupt_line;
+static void cpu_check_exceptions(Cpu *cpu) {
    if (cpu->priv_mode_violation_exception_line.toggle) {
       cpu->priv_mode_violation_exception_line.toggle = 0;
-      execute_exception(cpu, cpu->priv_mode_violation_exception_line.vec_location);
-      return;
-   }
-   if (cpu->illegal_opcode_exception_line.toggle) {
+      cpu_execute_exception(cpu, cpu->priv_mode_violation_exception_line.vec_location);
+   } else if (cpu->illegal_opcode_exception_line.toggle) {
       cpu->illegal_opcode_exception_line.toggle = 0;
-      execute_exception(cpu, cpu->illegal_opcode_exception_line.vec_location);
-      return;
+      cpu_execute_exception(cpu, cpu->illegal_opcode_exception_line.vec_location);
    }
+}
 
-   uint8_t priority;
-   uint8_t vec_location;
-   if (cpu->interrupt_controller->interrupt_line(cpu->interrupt_controller, &vec_location, &priority)) {
-      execute_interrupt(cpu, vec_location, priority);
-      return ;
+int cpu_signal_interrupt(Cpu *cpu, uint8_t vec_location, uint8_t priority) {
+   if (priority <= PSR_PRIORITY(cpu->psr)) {
+      return 0;
    }
-}*/
+   cpu_execute_interrupt(cpu, vec_location, priority);
+   return 1;
+}
 
 void free_cpu(Cpu *cpu) {
    free(cpu);
 }
 
-Cpu *new_Cpu(struct bus_accessor *bus_access, struct interrupt_checker *inter_check) {
+Cpu *new_Cpu(struct bus_accessor *bus_access) {
    Cpu *cpu;
    cpu = malloc(sizeof(Cpu));
    if (cpu == NULL) {
       return NULL;
    }
    cpu->bus_access = bus_access;
-   cpu->inter_check = inter_check;
    setup_exceptions(cpu);
    if (!instructions_loaded) {
       load_instructions();
@@ -400,30 +360,29 @@ Cpu *new_Cpu(struct bus_accessor *bus_access, struct interrupt_checker *inter_ch
    return cpu;
 }
 
-void cpu_subscribe_on_tick(Cpu *cpu, void (*callback)(void *), void *data) {
-   cpu->on_tick = callback;
-   cpu->on_tick_data = data;
-}
-
 void cpu_set_program_counter(Cpu *cpu, uint16_t address) {
    cpu->pc = address;
 }
 
-void cpu_execute_until_end(Cpu *cpu) {
+int cpu_tick(Cpu *cpu) {
    instru_func func;
    int opcode;
    uint16_t instruction;
-   printf("starting pc: %X\n", cpu->pc);
-   while (CLOCK_ENABLED(cpu->bus_access->read(cpu->bus_access, MCR_ADDR))) {
-      instruction = cpu->bus_access->read(cpu->bus_access, cpu->pc++);
-      opcode = OPCODE(instruction);
-      if (opcode > 15 || opcode == 13) {
-         cpu->illegal_opcode_exception_line.toggle = 1;
-      } else {
-         func = instru_func_vec[opcode];
-         func(cpu, instruction);
-      }
-      check_interrupts_and_exceptions(cpu);
-      if (cpu->on_tick != NULL) cpu->on_tick(cpu->on_tick_data);
+   if (!CLOCK_ENABLED(cpu->bus_access->read(cpu->bus_access, MCR_ADDR))) {
+      return 0;
    }
+   instruction = cpu->bus_access->read(cpu->bus_access, cpu->pc);
+   ++cpu->pc;
+   opcode = OPCODE(instruction);
+   if (opcode > 15 || opcode == 13) {
+      cpu->illegal_opcode_exception_line.toggle = 1;
+   } else {
+      func = instru_func_vec[opcode];
+      func(cpu, instruction);
+   }
+   if (!CLOCK_ENABLED(cpu->bus_access->read(cpu->bus_access, MCR_ADDR))) {
+      return 0;
+   }
+   cpu_check_exceptions(cpu);
+   return 1;
 }

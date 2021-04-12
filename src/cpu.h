@@ -11,10 +11,8 @@
 struct cpu;
 typedef struct cpu Cpu;
 
-struct interrupt_checker {
-    void *data;
-    int (*check_interrupt)(struct interrupt_checker *, uint8_t cmp_priority, uint8_t *, uint8_t *, int (*)(uint8_t, uint8_t));
-};
+enum lc3_reg {REG_R0, REG_R1, REG_R2, REG_R3, REG_R4, REG_R5, 
+    REG_R6, REG_R7, num_registers};
 
 struct bus_accessor {
     void *data;
@@ -22,13 +20,10 @@ struct bus_accessor {
     void (*write)(struct bus_accessor *, uint16_t, uint16_t);
 };
 
-
-Cpu *new_Cpu();
-void cpu_execute_until_end(Cpu *);
-void cpu_subscribe_on_tick(Cpu *, void (*)(void *), void *);
+Cpu *new_Cpu(struct bus_accessor *);
+int cpu_tick(Cpu *);
+int cpu_signal_interrupt(Cpu *, uint8_t, uint8_t);
 void cpu_set_program_counter(Cpu *, uint16_t);
 void free_cpu(Cpu *);
-
-enum reg {r0, r1, r2, r3, r4, r5, r6, r7, num_registers};
 
 #endif
