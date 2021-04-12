@@ -10,7 +10,7 @@ SRC=$(wildcard $(SRC_DIR)/*.c)
 OBJ=$(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRC))
 
 CPPFLAGS=-MMD -MP
-CFLAGS=-Wall -Werror -g
+CFLAGS=-Wall -Werror -g -fsanitize=undefined -fsanitize=address
 LDFLAGS=-ldl -lpthread -g
 
 .PHONY: all clean

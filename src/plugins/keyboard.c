@@ -34,7 +34,6 @@ static uint16_t keyboard_read_register(struct device *keyboard_device, uint16_t 
     struct keyboard_data *keyboard_data;
     uint16_t value;
     keyboard_data = keyboard_device->data;
-    printf("keyboard read register\n");
     switch (address) {
     case KBDR:
         keyboard_data->kbsr &= READY_BIT_SET_OFF;
@@ -68,7 +67,6 @@ static void keyboard_on_input(struct device *keyboard_device, uint16_t input) {
     keyboard_data->kbdr = input;
     keyboard_data->kbsr |= READY_BIT_SET_ON;
     if (INTERRUPT_ENABLE_BIT_ON(keyboard_data->kbsr)) {
-        printf("Keyboard alertting interrupt\n");
         keyboard_data->host->alert_interrupt(keyboard_data->host, KEYBOARD_INTERRUPT_VECTOR, KEYBOARD_INTERRUPT_PRIORITY);
     }
 }
