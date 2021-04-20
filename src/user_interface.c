@@ -15,6 +15,7 @@
 #include "simulator.h"
 #include "list.h"
 #include "device_io_impl.h"
+#include "lc3_reg.h"
 
 #ifdef __linux__
 #define EXTENSION "so"
@@ -26,14 +27,19 @@
 #define INITIAL_PROGRAM_BUF_LEN 50
 #define MAX_COMMAND_STR_SIZE 100
 
-#define UI_MEM_MODE_INDEX             1
+#define UI_REG_MEM_MODE_INDEX         1
 #define UI_MEM_WRITE_VALUE_INDEX      2
 #define UI_MEM_TOKEN1_READ_INDEX      2
 #define UI_MEM_TOKEN2_READ_INDEX      3
 #define UI_MEM_TOKEN1_WRITE_INDEX     3
 #define UI_MEM_TOKEN2_WRITE_INDEX     4
 
+#define UI_REG_DST_INDEX 2
+#define UI_REG_VAL_INDEX 3
+
 #define UI_STEP_AMT_INDEX 1
+
+#define UI_LOAD_FILENAME_INDEX 1
 
 struct ui {
     Simulator *simulator;
@@ -42,8 +48,7 @@ struct ui {
 };
 
 enum ui_status {CONTINUE, DONE, ERROR};
-enum ui_mem_mode {UI_MEM_READ, UI_MEM_WRITE};
-enum ui_mem_parse_state {MEM_PARSE_MODE, MEM_PARSE_VALUE, MEM_PARSE_ADDRESS1, MEM_PARSE_ADDRESS2};
+enum ui_reg_mem_mode {UI_REG_MEM_READ, UI_REG_MEM_WRITE};
 
 typedef enum ui_status (*command_func)(struct ui *, List *);
 
@@ -56,7 +61,9 @@ static enum ui_status ui_step(struct ui *, List *);
 static enum ui_status ui_help(struct ui *, List *);
 static enum ui_status ui_run(struct ui *, List *);
 static enum ui_status ui_mem(struct ui *, List *);
+static enum ui_status ui_reg(struct ui *, List *);
 static enum ui_status ui_load(struct ui *, List *);
+static enum ui_status ui_quit(struct ui *, List *);
 
 /* static const char *os_filename = "os.obj"; */
 
@@ -66,12 +73,11 @@ static const char *help_string = "help - print this message\nrun all = run entir
                                   "write mem [address] - write mem at address\n"
                                   "load [file] - load lc3 program";
 
-static const struct command commands[] = {{"step", ui_step}, {"help", ui_help}, {"run", ui_run}, {"mem", ui_mem}, {"load", ui_load}}; 
-static const int num_commands = 5;
+static const struct command commands[] = {{"step", ui_step}, {"help", ui_help}, {"run", ui_run}, {"mem", ui_mem}, {"reg", ui_reg}, {"load", ui_load}, {"quit", ui_quit}}; 
+static const int num_commands = 7;
 
-static const char *mem_usage = "Usage: mem [read/write] [(if write) value] [address] [address]";
-static const char *MEM_WRITE_MODE_STR = "write";
-static const char *MEM_READ_MODE_STR  = "read";
+static const char *REG_MEM_WRITE_MODE_STR = "write";
+static const char *REG_MEM_READ_MODE_STR  = "read";
 
 static int get_user_input(char *buffer) {
     printf("\ncommand> ");
@@ -91,18 +97,18 @@ static int program_reader(void *data, uint16_t *program_word) {
     } else if (result == 0) {
         return 0;
     }
-    
     *program_word = ntohs(*program_word);
     return result;
 }
 
-static char *ui_get_token(List *tokens, size_t index) {
-    void *token;
-    token = list_get(tokens, index);
-    if (token == NULL) {
-        return NULL;
+static int ui_get_token(List *tokens, size_t index, char **token) {
+    void *item;
+    item = list_get(tokens, index);
+    if (item == NULL) {
+        return 0;
     }
-    return *(char **)token;
+    *token = *(char **)item;
+    return 1;
 }
 
 static enum ui_status ui_help(struct ui *user_interface, List *input_tokens) {
@@ -119,19 +125,40 @@ static enum ui_status ui_run(struct ui *user_interface, List *input_tokens) {
     return CONTINUE;
 }
 
+static void ui_load_print_usage(void) {
+    printf("load usage: load [filename]\n");
+}
+
+static int ui_load_open_file(char *filename, FILE **program_file) {
+    int status;
+    status = 1;
+    *program_file  = fopen(filename, "r");
+    if (*program_file == NULL) {
+        if (errno == ENOMEM) {
+            status = -1;
+        }
+        status = 0;
+    }
+    return status;
+}
+
+static enum ui_status ui_quit(struct ui *user_interface, List *input_tokens) {
+    return DONE;
+}
+
 static enum ui_status ui_load(struct ui *user_interface, List *input_tokens) {
     FILE *program_file;
-    char const *filename;
-    if (list_num_elements(input_tokens) < 2) {
-        printf("filename not specified.\nUsage: load [filename]\n");
+    int open_file_status;
+    char *filename;
+    if (!ui_get_token(input_tokens, UI_LOAD_FILENAME_INDEX, &filename)) {
+        ui_load_print_usage();
         return CONTINUE;
     }
-    filename = *(char **)list_get(input_tokens, 1);
-    program_file = fopen(filename, "r");
-    if (program_file == NULL) {
-        if (errno == ENOMEM) {
-            return ERROR;
-        }
+    open_file_status = ui_load_open_file(filename, &program_file);
+    if (open_file_status < 0) {
+        return ERROR;
+    }
+    if (!open_file_status) {
         printf("%s: %s\n", filename, strerror(errno));
         return CONTINUE;
     }
@@ -142,23 +169,18 @@ static enum ui_status ui_load(struct ui *user_interface, List *input_tokens) {
     return CONTINUE;
 }
 
-static int convert_address_token(char *token, uint16_t *address) {
+static int ui_convert_address_token(char *token, uint16_t *address) {
     char *endptr;
     long long converted;
-    if (token == NULL) {
-        return 1;
-    }
     converted = string_to_ll_10_or_16(token, &endptr);
     if (endptr == token || *endptr != '\0') {
-        printf("%s contains invalid characters\n", token);
         return 0;
     }
     if (converted < LOW_ADDRESS || converted > HGIH_ADDRESS) {
-        printf("%s is out of range. Must be between 0x%04X and 0x%04X\n", token, LOW_ADDRESS, HGIH_ADDRESS);
         return 0;
     }
     *address = converted;
-    return 1; 
+    return 1;
 }
 
 static void ui_mem_print(struct ui *user_interface, uint16_t low, uint16_t high) {
@@ -169,7 +191,7 @@ static void ui_mem_print(struct ui *user_interface, uint16_t low, uint16_t high)
         enum simulator_address_status address_status;
         char cur_address_str[7], cur_value_str[7];
         address_status = simulator_read_address(user_interface->simulator, cur_address, &cur_value);
-        snprintf(cur_address_str, sizeof(cur_address_str), "0X%04lX", cur_address);
+        snprintf(cur_address_str, sizeof(cur_address_str), "0X%04X", (uint16_t)cur_address);
         if (address_status == VALUE) {
             snprintf(cur_value_str, sizeof(cur_value_str), "0X%04X", cur_value);
             printf("%-13s%-13s\n", cur_address_str, cur_value_str);
@@ -188,112 +210,199 @@ static void ui_mem_write(struct ui *user_interface, uint16_t value, uint16_t low
     }
 }
 
-static int ui_mem_get_mode(List *input_tokens, enum ui_mem_mode *mode) {
-    char *mode_str;
+static int ui_reg_mem_convert_mode(char *mode_token, enum ui_reg_mem_mode *mode) {
     int result;
-    if (list_num_elements(input_tokens) < 2) {
-        printf("mem: invalid args. %s\n", mem_usage);
-        return 0;
-    }
-    mode_str = ui_get_token(input_tokens, UI_MEM_MODE_INDEX);
     result = 1;
-    if (strcmp(mode_str, MEM_READ_MODE_STR) == 0) {
-        *mode = UI_MEM_READ;
-    } else if (strcmp(mode_str, MEM_WRITE_MODE_STR) == 0) {
-        *mode = UI_MEM_WRITE;
+    if (strcmp(mode_token, REG_MEM_READ_MODE_STR) == 0) {
+        *mode = UI_REG_MEM_READ;
+    } else if (strcmp(mode_token, REG_MEM_WRITE_MODE_STR) == 0) {
+        *mode = UI_REG_MEM_WRITE;
     } else {
-        printf("Mem: %s: invalid mode. %s\n", mode_str, mem_usage);
         result = 0;
     }
     return result;
 }
 
-static int ui_mem_get_addresses(List *input_tokens, enum ui_mem_mode mode, uint16_t *low, uint16_t *high) {
-    char *token1, *token2;
-    int token1_status, token2_status;
-    size_t token1_index, token2_index;
-    if (mode == UI_MEM_READ) {
-        token1_index = UI_MEM_TOKEN1_READ_INDEX;
-        token2_index = UI_MEM_TOKEN2_READ_INDEX;
+static int ui_mem_get_address_tokens(List *input_tokens, enum ui_reg_mem_mode mode, char **low_token, char **high_token) {
+    size_t low_index, high_index;
+    if (mode == UI_REG_MEM_READ) {
+        low_index = UI_MEM_TOKEN1_READ_INDEX;
+        high_index = UI_MEM_TOKEN2_READ_INDEX;
     } else {
-        token1_index = UI_MEM_TOKEN1_WRITE_INDEX;
-        token2_index = UI_MEM_TOKEN2_WRITE_INDEX;
+        low_index = UI_MEM_TOKEN1_WRITE_INDEX;
+        high_index = UI_MEM_TOKEN2_WRITE_INDEX;
     }
-    token1 = ui_get_token(input_tokens, token1_index);
-    if (token1 == NULL) {
-        printf("mem: invalid number of args\n");
-        return CONTINUE;
+    if (!ui_get_token(input_tokens, low_index, low_token)) {
+        return 0;
     }
-    token2 = ui_get_token(input_tokens, token2_index);
-    token1_status = token2_status = 1;
-    token1_status = convert_address_token(token1, low);
-    if (token2 != NULL) {
-        token2_status = convert_address_token(token2, high);
-    } else {
-        *high = *low;
+    if (!ui_get_token(input_tokens, high_index, high_token)) {
+        *high_token = NULL;
     }
-    return token1_status && token2_status;
+    return 1;
 }
 
-static int ui_mem_get_write_value(List *input_tokens, uint16_t *write_value) {
-    char *token;
-    char *endptr;
-    long long converted;
-    token = ui_get_token(input_tokens, UI_MEM_WRITE_VALUE_INDEX);
-    converted = string_to_ll_10_or_16(token, &endptr);
-    if (endptr == token || *endptr != '\0') {
-        printf("Write value contains invalid characters\n");
+static int ui_mem_get_addresses(List *input_tokens, enum ui_reg_mem_mode mode, uint16_t *low, uint16_t *high) {
+    char *low_token, *high_token;
+    if (!ui_mem_get_address_tokens(input_tokens, mode, &low_token, &high_token)) {
         return 0;
     }
-    if (converted < 0 || converted > UINT16_MAX) {
-        printf("Write value out of range. Must be between 0X%04X and 0X%04X\n", 0, UINT16_MAX);
+    if (!ui_convert_address_token(low_token, low)) {
         return 0;
     }
-    *write_value = converted;
+    if (high_token == NULL) {
+        *high = *low;
+    } else if (!ui_convert_address_token(high_token, high)) {
+        return 0;
+    }
     return 1;
+}
+
+/* inclusive */
+static int ui_convert_str_range(char *str, long long *val, long long low, long long high) {
+    char *endptr;
+    *val = string_to_ll_10_or_16(str, &endptr);
+    return (endptr != str && *endptr == '\0' && *val >= low && *val <= high);
+}
+
+static int ui_convert_str_to_uint16(char *val_token, uint16_t *val) {
+    long long converted;
+    if (!ui_convert_str_range(val_token, &converted, 0, UINT16_MAX)) {
+        return 0;
+    }
+    *val = converted;
+    return 1;
+}
+
+static int ui_mem_get_write_val(List *input_tokens, uint16_t *write_val) {
+    char *val_token;
+    return ui_get_token(input_tokens, UI_MEM_WRITE_VALUE_INDEX, &val_token) &&
+           ui_convert_str_to_uint16(val_token, write_val); 
+}
+
+static int ui_mem_get_mode(List *input_tokens, enum ui_reg_mem_mode *mode) {
+    char *mode_token;
+    return ui_get_token(input_tokens, UI_REG_MEM_MODE_INDEX, &mode_token) &&
+           ui_reg_mem_convert_mode(mode_token, mode); 
+}
+
+static void ui_mem_print_usage(void) {
+    printf("mem usage: mem [mode] [low address] [high address] [write val]\n");
 }
 
 static enum ui_status ui_mem(struct ui *user_interface, List *input_tokens) {
     uint16_t low, high;
-    enum ui_mem_mode mode;
+    enum ui_reg_mem_mode mode;
     if (!ui_mem_get_mode(input_tokens, &mode)) {
-        return CONTINUE;
+        goto err;
     }
     if (!ui_mem_get_addresses(input_tokens, mode, &low, &high)) {
-        return CONTINUE;
+        goto err;
     }
-    if (mode == UI_MEM_READ) {
+    if (mode == UI_REG_MEM_READ) {
         ui_mem_print(user_interface, low, high);
-    } else if (mode == UI_MEM_WRITE) {
-        uint16_t write_value;
-        if (!ui_mem_get_write_value(input_tokens, &write_value)) {
-            return CONTINUE;
+    } else if (mode == UI_REG_MEM_WRITE) {
+        uint16_t write_val;
+        if (!ui_mem_get_write_val(input_tokens, &write_val)) {
+            goto err;
         }
-        ui_mem_write(user_interface, write_value, low, high);
+        ui_mem_write(user_interface, write_val, low, high);
     }
+    return CONTINUE;
+
+err:
+    ui_mem_print_usage();
     return CONTINUE;
 }
 
-static enum ui_status ui_step(struct ui *user_interface, List *input_tokens) {
-    int step_status;
-    if (list_num_elements(input_tokens) < 2) {
-        step_status = simulator_step(user_interface->simulator, 1);
-    } else {
-        char *step_amt_token;
-        char *endptr;
-        long long converted;
-        step_amt_token = ui_get_token(input_tokens, UI_STEP_AMT_INDEX);
-        converted = string_to_ll_10_or_16(step_amt_token, &endptr);
-        if (endptr == step_amt_token || *endptr != '\0') {
-            printf("step: %s contains invalid characters\n", step_amt_token);
-            return CONTINUE;
-        }
-        if (converted < 0 || converted > UINT16_MAX) {
-            printf("step: %s is too large\n", step_amt_token);
-            return CONTINUE;
-        }
-        step_status = simulator_step(user_interface->simulator, converted);
+static void ui_reg_print(struct ui *user_interface) {
+    Simulator *simulator;
+    uint16_t r0, r1, r2, r3, r4, r5, r6, r7, pc, psr, usp, ssp;
+    simulator = user_interface->simulator;
+    r0 =  simulator_read_register(simulator, REG_R0);
+    r1 =  simulator_read_register(simulator, REG_R1);
+    r2 =  simulator_read_register(simulator, REG_R2);
+    r3 =  simulator_read_register(simulator, REG_R3);
+    r4 =  simulator_read_register(simulator, REG_R4);
+    r5 =  simulator_read_register(simulator, REG_R5);
+    r6 =  simulator_read_register(simulator, REG_R6);
+    r7 =  simulator_read_register(simulator, REG_R7);
+    pc =  simulator_read_register(simulator, REG_PC);
+    psr = simulator_read_register(simulator, REG_PSR);
+    usp = simulator_read_register(simulator, REG_USP);
+    ssp = simulator_read_register(simulator, REG_SSP);
+    printf("R0: 0X%04X, R1: 0X%04X, R2: 0X%04X, R3: 0X%04X, R4: 0X%04X, R5: 0X%04X, R6: 0X%04X, R7: 0X%04X\n",
+        r0, r1, r2, r3, r4, r5, r6, r7);
+    printf("PC: 0X%04X, PSR: 0X%04X, USP: 0X%04X, SSP: 0X%04X\n", 
+        pc, psr, usp, ssp);
+}
+
+static int ui_reg_get_dst(List *input_tokens, enum lc3_reg *reg_dst) {
+    char *reg_token;
+    return ui_get_token(input_tokens, UI_REG_DST_INDEX, &reg_token) &&
+           lc3_reg_str_convert(reg_token, reg_dst);
+}
+
+static int ui_reg_get_val(List *input_tokens, uint16_t *val) {
+    char *val_token;
+    return ui_get_token(input_tokens, UI_REG_VAL_INDEX, &val_token) &&
+           ui_convert_str_to_uint16(val_token, val); 
+}
+
+static void ui_reg_write(struct ui *user_interface, enum lc3_reg reg_dst, uint16_t val) {
+    simulator_write_register(user_interface->simulator, reg_dst, val);
+}
+
+static int ui_reg_get_mode(List *input_tokens, enum ui_reg_mem_mode *mode) {
+    char *mode_token;
+    return ui_get_token(input_tokens, UI_REG_MEM_MODE_INDEX, &mode_token) &&
+           ui_reg_mem_convert_mode(mode_token, mode);
+}
+
+static void ui_reg_print_usage(void) {
+    printf("reg usage: reg [read/write] [register] [write value]\n");
+}
+
+static enum ui_status ui_reg(struct ui *user_interface, List *input_tokens) {
+    enum ui_reg_mem_mode mode;
+    if (!ui_reg_get_mode(input_tokens, &mode)) {
+        goto err;
     }
+    if (mode == UI_REG_MEM_READ) {
+        ui_reg_print(user_interface);
+    } else if (mode == UI_REG_MEM_WRITE) {
+        enum lc3_reg reg_dst;
+        uint16_t val;
+        if (!ui_reg_get_val(input_tokens, &val)) {
+            goto err;
+        }
+        if (!ui_reg_get_dst(input_tokens, &reg_dst)) {
+            goto err;
+        }
+        ui_reg_write(user_interface, reg_dst, val);
+    }
+    return CONTINUE;
+
+err:
+    ui_reg_print_usage();
+    return CONTINUE;    
+}
+
+static int ui_step_get_amt(List *input_tokens, long long *amt) {
+    char *step_amt_token;
+    if (!ui_get_token(input_tokens, UI_STEP_AMT_INDEX, &step_amt_token)) {
+        *amt = 1;
+        return 1;
+    }
+    return ui_convert_str_range(step_amt_token, amt, 0, LLONG_MAX);
+}
+
+static enum ui_status ui_step(struct ui *user_interface, List *input_tokens) {
+    long long step_amt;
+    int step_status;
+    if (!ui_step_get_amt(input_tokens, &step_amt)) {
+        return CONTINUE;
+    }   
+    step_status = simulator_step(user_interface->simulator, step_amt);
     return step_status < 0 ? ERROR : CONTINUE;
 }
 
@@ -401,7 +510,7 @@ int start(char *executable_path) {
     struct ui user_interface;
     char load_devices_err_str[PM_ERROR_STR_SIZ];
 
-    user_interface.device_plugins = pm_load_device_plugins("./devices", EXTENSION, load_devices_err_str);
+    user_interface.device_plugins = pm_load_device_plugins("../obj", EXTENSION, load_devices_err_str);
     if (user_interface.device_plugins == NULL) {
 
         err_exit(load_devices_err_str);

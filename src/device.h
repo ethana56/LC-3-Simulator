@@ -24,4 +24,4 @@ struct device {
     enum address_method (*get_address_method)(struct device *);
 };
 
-#endif 
+#endif

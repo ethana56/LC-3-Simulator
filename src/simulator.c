@@ -11,6 +11,7 @@
 #include "simulator.h"
 #include "device.h"
 #include "device_io.h"
+#include "lc3_reg.h"
 
 struct simulator {
     struct bus_accessor bus_accessor;
@@ -90,6 +91,14 @@ enum simulator_address_status simulator_read_address(Simulator *simulator, uint1
     return VALUE;
 }
 
+uint16_t simulator_read_register(Simulator *simulator, enum lc3_reg reg) {
+    return cpu_read_register(simulator->cpu, reg);
+}
+
+void simulator_write_register(Simulator *simulator, enum lc3_reg reg, uint16_t value) {
+    cpu_write_register(simulator->cpu, reg, value);
+}
+
 int simulator_run_until_end(Simulator *simulator) {
     if (simulator->device_io->start(simulator->device_io) < 0) {
         return -1;
@@ -105,9 +114,9 @@ int simulator_run_until_end(Simulator *simulator) {
     return 0;
 }
 
-int simulator_step(Simulator *simulator, int amt) {
+int simulator_step(Simulator *simulator, long long amt) {
     int tick_status;
-    int i;
+    long long i;
     if (simulator->device_io->start(simulator->device_io) < 0) {
         return -1;
     }
@@ -135,7 +144,7 @@ int simulator_load_program(Simulator *simulator, int (*callback)(void *, uint16_
         bus_write(simulator->bus, cur_address, cur_word);
         ++cur_address;
     }
-    cpu_set_program_counter(simulator->cpu, starting_address);
+    cpu_write_register(simulator->cpu, REG_PC, starting_address);
     return callback_result;
 }
 

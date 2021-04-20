@@ -31,6 +31,9 @@ static int build_path(char *dst, const char *directory_str, const char *file_nam
     } else {
         combined_size = snprintf(dst, dst_size, "%s%s", directory_str, file_name);
     }
+    if (combined_size < 0) {
+        return -1;
+    }
     if (combined_size >= dst_size) {
         return 0;
     }
@@ -129,10 +132,15 @@ List *pm_load_device_plugins(const char *dir_path, const char *extension, char *
     while ((dp = readdir(dir)) != NULL) {
         char path[PATH_BUFSIZ];
         struct stat file_stat;
+        int build_path_result;
         if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
             continue;
         }
-        if (!build_path(path, dir_path, dp->d_name, sizeof(path))) {
+        build_path_result = build_path(path, dir_path, dp->d_name, sizeof(path));
+        if (build_path_result < 0) {
+            goto err;
+        }
+        if (!build_path_result) {
             continue;
         }
         if (!check_extension(path, extension)) {

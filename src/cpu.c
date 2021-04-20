@@ -13,6 +13,7 @@
 #include <time.h>
 
 #include "cpu.h"
+#include "lc3_reg.h"
 
 #define ADD      0x1
 #define AND      0x5
@@ -80,17 +81,9 @@ struct cpu_exception {
 
 struct cpu {
    struct bus_accessor *bus_access;
-   void (*on_tick)(void *);
-   void *on_tick_data;
    struct cpu_exception priv_mode_violation_exception_line;
    struct cpu_exception illegal_opcode_exception_line;
    uint16_t registers[num_registers];
-   uint16_t pc;
-   uint16_t psr;
-   struct {
-      uint16_t usp;
-      uint16_t ssp;
-   } saved;
 };
 
 static instru_func instru_func_vec[16];
@@ -126,13 +119,13 @@ static uint16_t sign_extend(uint16_t value, int num_bits) {
 
 static void set_condition_code(Cpu *cpu, int reg) {
    int16_t val = cpu->registers[reg];
-   cpu->psr &= NZP_PSR_CLEAR_MASK;
+   cpu->registers[REG_PSR] &= NZP_PSR_CLEAR_MASK;
    if (val > 0) {
-      cpu->psr |= SET_PSR_P_MASK;
+      cpu->registers[REG_PSR] |= SET_PSR_P_MASK;
    } else if (val < 0) {
-      cpu->psr |= SET_PSR_N_MASK;
+      cpu->registers[REG_PSR] |= SET_PSR_N_MASK;
    } else {
-      cpu->psr |= SET_PSR_Z_MASK;
+      cpu->registers[REG_PSR] |= SET_PSR_Z_MASK;
    }
 }
 
@@ -156,36 +149,36 @@ static void add_and(Cpu *cpu, uint16_t instruction) {
 static void br(Cpu *cpu, uint16_t instruction) {
    uint16_t pc_offset;
    unsigned nzp_instru = NZP_INSTRU(instruction);
-   unsigned nzp_psr    = NZP_PSR(cpu->psr);
+   unsigned nzp_psr    = NZP_PSR(cpu->registers[REG_PSR]);
    if (nzp_instru & nzp_psr) {
       pc_offset = sign_extend(PCOFFSET9(instruction), 9);
-      cpu->pc += pc_offset;
+      cpu->registers[REG_PC] += pc_offset;
    }
 }
 
 static void jmp_ret(Cpu *cpu, uint16_t instruction) {
-   cpu->pc = cpu->registers[REG2_INSTRU(instruction)];
+   cpu->registers[REG_PC] = cpu->registers[REG2_INSTRU(instruction)];
 }
 
 static void jsr_jsrr(Cpu *cpu, uint16_t instruction) {
    uint16_t new_pc;
-   cpu->registers[REG_R7] = cpu->pc;
+   cpu->registers[REG_R7] = cpu->registers[REG_PC];
    if (IS_JSR(instruction)) {
-      new_pc = cpu->pc + sign_extend(PCOFFSET11(instruction), 11);
+      new_pc = cpu->registers[REG_PC] + sign_extend(PCOFFSET11(instruction), 11);
    } else {
-      new_pc = cpu->pc + cpu->registers[REG2_INSTRU(instruction)];
+      new_pc = cpu->registers[REG_PC] + cpu->registers[REG2_INSTRU(instruction)];
    }
-   cpu->pc = new_pc;
+   cpu->registers[REG_PC] = new_pc;
 }
 
 static uint16_t compute_direct_address(Cpu *cpu, uint16_t instruction) {
-   return cpu->pc + sign_extend(PCOFFSET9(instruction), 9);
+   return cpu->registers[REG_PC] + sign_extend(PCOFFSET9(instruction), 9);
 }
 
 static uint16_t compute_indirect_address(Cpu *cpu, uint16_t instruction) {
    uint16_t pc_offset;
    pc_offset = sign_extend(PCOFFSET9(instruction), 9);
-   return cpu->bus_access->read(cpu->bus_access, cpu->pc + pc_offset);
+   return cpu->bus_access->read(cpu->bus_access, cpu->registers[REG_PC] + pc_offset);
 }
 
 static uint16_t compute_base_plus_offset(Cpu *cpu, uint16_t instruction) {
@@ -230,14 +223,14 @@ static void not(Cpu *cpu, uint16_t instruction) {
 }
 
 static void rti(Cpu *cpu, uint16_t instruction) {
-   if (SUPERVISOR_BIT(cpu->psr)) {
+   if (SUPERVISOR_BIT(cpu->registers[REG_PSR])) {
       cpu->priv_mode_violation_exception_line.toggle = 1;
       return;
    }
-   cpu->pc = supervisor_stack_pop(cpu);
-   cpu->psr = supervisor_stack_pop(cpu);
-   if (!SUPERVISOR_BIT(cpu->psr)) {
-      cpu->registers[REG_R6] = cpu->saved.usp;
+   cpu->registers[REG_PC] = supervisor_stack_pop(cpu);
+   cpu->registers[REG_PSR] = supervisor_stack_pop(cpu);
+   if (!SUPERVISOR_BIT(cpu->registers[REG_PSR])) {
+      cpu->registers[REG_R6] = cpu->registers[REG_USP];
    }
 }
 
@@ -264,8 +257,8 @@ static void trap(Cpu *cpu, uint16_t instruction) {
    if (trapvector > 0x00FF) {
       /* ERROR */
    }
-   cpu->registers[REG_R7] = cpu->pc;
-   cpu->pc = cpu->bus_access->read(cpu->bus_access, trapvector);
+   cpu->registers[REG_R7] = cpu->registers[REG_PC];
+   cpu->registers[REG_PC] = cpu->bus_access->read(cpu->bus_access, trapvector);
    /*psr &= 0x7FFF; mabye*/
 }
 
@@ -289,35 +282,35 @@ static void load_instructions(void) {
 
 static void cpu_execute_interrupt(Cpu *cpu, uint8_t vec_location, uint8_t priority) {
    uint16_t priority_extended;
-   if (SUPERVISOR_BIT(cpu->psr)) {
-      cpu->saved.usp = cpu->registers[REG_R6];
-      cpu->registers[REG_R6] = cpu->saved.ssp;
+   if (SUPERVISOR_BIT(cpu->registers[REG_PSR])) {
+      cpu->registers[REG_USP] = cpu->registers[REG_R6];
+      cpu->registers[REG_R6] = cpu->registers[REG_SSP];
    }
-   supervisor_stack_push(cpu, cpu->psr);
-   supervisor_stack_push(cpu, cpu->pc);
+   supervisor_stack_push(cpu, cpu->registers[REG_PSR]);
+   supervisor_stack_push(cpu, cpu->registers[REG_PC]);
    /* clear psr */
-   cpu->psr = 0;
+   cpu->registers[REG_PSR] = 0;
    /* set to supervisor mode */
-   cpu->psr |= INIT_PSR_MASK_SUPERVISOR;
+   cpu->registers[REG_PSR] |= INIT_PSR_MASK_SUPERVISOR;
    /* set priority level */
    priority_extended = priority;
-   cpu->psr |= (priority_extended << 8);
+   cpu->registers[REG_PSR] |= (priority_extended << 8);
    /* set pc to interrupt vector */
-   cpu->pc = cpu->bus_access->read(cpu->bus_access, INTERRUPT_VECTOR_TABLE | vec_location);
+   cpu->registers[REG_PC] = cpu->bus_access->read(cpu->bus_access, INTERRUPT_VECTOR_TABLE | vec_location);
 }
 
 static void cpu_execute_exception(Cpu *cpu, uint8_t vec_location) {
-   uint16_t priority = 0x0007 & (cpu->psr >> 8);
-   if (SUPERVISOR_BIT(cpu->psr)) {
-      cpu->saved.usp = cpu->registers[REG_R6];
-      cpu->registers[REG_R6] = cpu->saved.ssp;
+   uint16_t priority = 0x0007 & (cpu->registers[REG_PSR] >> 8);
+   if (SUPERVISOR_BIT(cpu->registers[REG_PSR])) {
+      cpu->registers[REG_USP] = cpu->registers[REG_R6];
+      cpu->registers[REG_R6] = cpu->registers[REG_SSP];
    }
-   supervisor_stack_push(cpu, cpu->psr);
-   supervisor_stack_push(cpu, cpu->pc);
-   cpu->psr = 0;
-   cpu->psr |= INIT_PSR_MASK_SUPERVISOR;
-   cpu->psr |= (priority << 8);
-   cpu->pc = cpu->bus_access->read(cpu->bus_access, INTERRUPT_VECTOR_TABLE | vec_location);
+   supervisor_stack_push(cpu, cpu->registers[REG_PSR]);
+   supervisor_stack_push(cpu, cpu->registers[REG_PC]);
+   cpu->registers[REG_PSR] = 0;
+   cpu->registers[REG_PSR] |= INIT_PSR_MASK_SUPERVISOR;
+   cpu->registers[REG_PSR] |= (priority << 8);
+   cpu->registers[REG_PC] = cpu->bus_access->read(cpu->bus_access, INTERRUPT_VECTOR_TABLE | vec_location);
 }
 
 static void cpu_check_exceptions(Cpu *cpu) {
@@ -331,7 +324,7 @@ static void cpu_check_exceptions(Cpu *cpu) {
 }
 
 int cpu_signal_interrupt(Cpu *cpu, uint8_t vec_location, uint8_t priority) {
-   if (priority <= PSR_PRIORITY(cpu->psr)) {
+   if (priority <= PSR_PRIORITY(cpu->registers[REG_PSR])) {
       return 0;
    }
    cpu_execute_interrupt(cpu, vec_location, priority);
@@ -340,6 +333,14 @@ int cpu_signal_interrupt(Cpu *cpu, uint8_t vec_location, uint8_t priority) {
 
 void free_cpu(Cpu *cpu) {
    free(cpu);
+}
+
+uint16_t cpu_read_register(Cpu *cpu, enum lc3_reg reg) {
+   return cpu->registers[reg];
+}
+
+void cpu_write_register(Cpu *cpu, enum lc3_reg reg, uint16_t value) {
+   cpu->registers[reg] = value;
 }
 
 Cpu *new_Cpu(struct bus_accessor *bus_access) {
@@ -353,15 +354,9 @@ Cpu *new_Cpu(struct bus_accessor *bus_access) {
    if (!instructions_loaded) {
       load_instructions();
    }
-   cpu->on_tick = NULL;
-   cpu->on_tick_data = NULL;
-   memset(cpu->registers, 0, sizeof(uint16_t) * 8);
+   memset(cpu->registers, 0, sizeof(uint16_t) * num_registers);
    bus_access->write(bus_access, MCR_ADDR, 0x8000);
    return cpu;
-}
-
-void cpu_set_program_counter(Cpu *cpu, uint16_t address) {
-   cpu->pc = address;
 }
 
 int cpu_tick(Cpu *cpu) {
@@ -371,8 +366,8 @@ int cpu_tick(Cpu *cpu) {
    if (!CLOCK_ENABLED(cpu->bus_access->read(cpu->bus_access, MCR_ADDR))) {
       return 0;
    }
-   instruction = cpu->bus_access->read(cpu->bus_access, cpu->pc);
-   ++cpu->pc;
+   instruction = cpu->bus_access->read(cpu->bus_access, cpu->registers[REG_PC]);
+   ++cpu->registers[REG_PC];
    opcode = OPCODE(instruction);
    if (opcode > 15 || opcode == 13) {
       cpu->illegal_opcode_exception_line.toggle = 1;
