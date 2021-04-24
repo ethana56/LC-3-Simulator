@@ -7,21 +7,28 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <dlfcn.h>
+#include <libgen.h>
 
 #include "list.h"
 #include "plugin_manager.h"
 #include "simulator.h"
 #include "device.h"
+#include "util.h"
 
-#define PATH_BUFSIZ BUFSIZ
+struct plugin_names {
+    char *path;
+    char *name;
+};
 
-static void create_func_null_error_string(char *error_string, const char *path) {
-    static char func_not_found_error_str[] = "init_device_plugin is null in:";	
-    snprintf(error_string, PM_ERROR_STR_SIZ, "%s%s\n", func_not_found_error_str, path);
-}
+static const char *func_null_error_string = "init_device_plugin is null";
 
-static void cpy_error_string(char *dst, char *src) {
-    snprintf(dst, PM_ERROR_STR_SIZ, "%s", src);
+static void (*pm_on_error_ptr)(const char *path, const char *error_string, enum pm_error error_type, void *data) = NULL;
+static void *pm_on_error_data;
+
+static void pm_on_error(const char *path, const char *error_string, enum pm_error error_type) {
+    if (pm_on_error_ptr != NULL) {
+        pm_on_error_ptr(path, error_string, error_type, pm_on_error_data);
+    }
 }
 
 static int build_path(char *dst, const char *directory_str, const char *file_name, size_t dst_size) {
@@ -30,9 +37,6 @@ static int build_path(char *dst, const char *directory_str, const char *file_nam
         combined_size = snprintf(dst, dst_size, "%s%s%s", directory_str, "/", file_name);
     } else {
         combined_size = snprintf(dst, dst_size, "%s%s", directory_str, file_name);
-    }
-    if (combined_size < 0) {
-        return -1;
     }
     if (combined_size >= dst_size) {
         return 0;
@@ -50,35 +54,43 @@ static int check_extension(const char *path, const char *extension) {
     return strcmp(path_ext, extension) == 0;
 }
 
-static struct device *init_plugin(void *dlhandle, const char *path, char *error_string) {
-    struct device *(*init_device_plugin)(void) = NULL;
+static struct device *pm_init_plugin(void *dlhandle, const char *path) {
+    struct device *(*init_device_plugin)(void);
     struct device *plugin;
     char *dl_error_string;
     init_device_plugin = dlsym(dlhandle, "init_device_plugin");
     if (init_device_plugin == NULL) {
         dl_error_string = dlerror();
         if (dl_error_string == NULL) {
-            create_func_null_error_string(error_string, dl_error_string);
+            pm_on_error(path, func_null_error_string, PM_ERROR_PLUGIN_LOAD);
         } else {
-            cpy_error_string(error_string, dl_error_string);
+            pm_on_error(path, strerror(errno), PM_ERROR_PLUGIN_LOAD);
         }
         return NULL;
     }
     plugin = init_device_plugin();
     if (plugin == NULL) {
-        cpy_error_string(error_string, strerror(errno));
+        pm_on_error(path, strerror(errno), PM_ERROR_PLUGIN_LOAD);
         return NULL;
     }
     return plugin;
 }
 
-static int load_device_plugin(const char *path, struct device_data *device_plugin, char *error_string) {
-    device_plugin->dlhandle = dlopen(path, RTLD_NOW);
+/* does not free the object being pointed to */
+void pm_free_plugin(struct device_data *device_plugin) {
+    device_plugin->device->free(device_plugin->device);
+    free(device_plugin->name);
+    free(device_plugin->path);
+    dlclose(device_plugin->dlhandle);
+}
+
+static int pm_load_plugin(struct device_data *device_plugin) {
+    device_plugin->dlhandle = dlopen(device_plugin->path, RTLD_NOW);
     if (device_plugin->dlhandle == NULL) {
-        cpy_error_string(error_string, dlerror());
+        pm_on_error(device_plugin->path, dlerror(), PM_ERROR_PLUGIN_LOAD);
         return -1;
     }
-    device_plugin->device = init_plugin(device_plugin->dlhandle, path, error_string);
+    device_plugin->device = pm_init_plugin(device_plugin->dlhandle, device_plugin->path);
     if (device_plugin->device == NULL) {
         dlclose(device_plugin->dlhandle);
         return -1;
@@ -86,86 +98,130 @@ static int load_device_plugin(const char *path, struct device_data *device_plugi
     return 0;
 }
 
-static int add_device_plugin(List *device_plugins, const char *path, char *error_string) {
-    struct device_data device_data;
-    if (load_device_plugin(path, &device_data, error_string) < 0) {
-        goto load_device_plugin_err;
+static List *pm_load_plugins(List *plugin_names) {
+    size_t num_plugin_names, i;
+    List *device_plugins;
+    device_plugins = list_new(sizeof(struct device_data), 4, 1.0, &util_list_allocator);
+    num_plugin_names = list_num_elements(plugin_names);
+    for (i = 0; i < num_plugin_names; ++i) {
+        struct plugin_names *plugin_name;
+        struct device_data device_plugin;
+        plugin_name = list_get(plugin_names, i);
+        device_plugin.name = plugin_name->name;
+        device_plugin.path = plugin_name->path;
+        if (pm_load_plugin(&device_plugin) < 0) {
+            continue;
+        }
+        list_add(device_plugins, &device_plugin);
+        /* set name and path to null to prevent double free's when freeing the plugin */
+        plugin_name->name = NULL;
+        plugin_name->path = NULL;
     }
-    if (list_add(device_plugins, &device_data) < 0) {
-        cpy_error_string(error_string, strerror(errno));
-        goto list_add_err;
-    }
-    return 0;
-
-list_add_err:
-    device_data.device->free(device_data.device);
-    dlclose(device_data.dlhandle);
-load_device_plugin_err:
-    return -1;        
+    return device_plugins;
 }
 
-void pm_plugins_free(List *device_plugins) {
-    size_t num_plugins, i;
-    num_plugins = list_num_elements(device_plugins);
-    for (i = 0; i < num_plugins; ++i) {
-        struct device_data *cur_plugin;
-        cur_plugin = list_get(device_plugins, i);
-        cur_plugin->device->free(cur_plugin->device);
-        dlclose(cur_plugin->dlhandle);
+static struct plugin_names *pm_check_names(List *plugin_names, const char *name) {
+    size_t num_plugin_names, i;
+    num_plugin_names = list_num_elements(plugin_names);
+    for (i = 0; i < num_plugin_names; ++i) {
+        struct plugin_names *cur_plugin_name;
+        cur_plugin_name = list_get(plugin_names, i);
+        if (strcmp(name, cur_plugin_name->name) == 0) {
+            return cur_plugin_name;
+        }
     }
-    list_free(device_plugins);
+    return NULL;
 }
 
-List *pm_load_device_plugins(const char *dir_path, const char *extension, char *error_string) {
-    List *devices = NULL;
+static void pm_collect_device_plugin_name(List *plugin_names, const char *path) {
+    struct plugin_names plugin_name;
+    struct plugin_names *existing_plugin_name;
+    size_t path_len;
+    char *base_name;
+    path_len = strlen(path);
+    base_name = get_basename(path, path_len);
+    plugin_name.path = safe_malloc(sizeof(char) * path_len + 1);
+    strcpy(plugin_name.path, path);
+    plugin_name.name = base_name;
+    existing_plugin_name = pm_check_names(plugin_names, base_name);
+    if (existing_plugin_name != NULL) {
+        free(existing_plugin_name->name);
+        free(existing_plugin_name->path);
+        *existing_plugin_name = plugin_name;
+    } else {
+        list_add(plugin_names, &plugin_name);
+    }
+}
+
+static void pm_collect_device_plugins_from_dir(const char *dir_path, const char *extension, List *plugin_names) {
     DIR *dir;
     struct dirent *dp;
     dir = opendir(dir_path);
     if (dir == NULL) {
-        goto err_str;
-    }
-    devices = list_new(sizeof(struct device_data), 2, 1.0);
-    if (devices == NULL) {
-        goto err_str;
+        pm_on_error(dir_path, strerror(errno), PM_ERROR_OPENDIR);
+        return;
     }
     errno = 0;
     while ((dp = readdir(dir)) != NULL) {
-        char path[PATH_BUFSIZ];
+        char path[PATH_MAX];
         struct stat file_stat;
-        int build_path_result;
         if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
             continue;
         }
-        build_path_result = build_path(path, dir_path, dp->d_name, sizeof(path));
-        if (build_path_result < 0) {
-            goto err;
-        }
-        if (!build_path_result) {
+        if (!build_path(path, dir_path, dp->d_name, sizeof(path))) {
             continue;
         }
         if (!check_extension(path, extension)) {
             continue;
         }
         if (stat(path, &file_stat) < 0) {
-            goto err_str;
+            pm_on_error(path, strerror(errno), PM_ERROR_PLUGIN_LOAD);
+            continue;
         }
         if (S_ISDIR(file_stat.st_mode)) {
             continue;
         }
-        if (add_device_plugin(devices, path, error_string) < 0) {	
-            goto err;
-        }
+        pm_collect_device_plugin_name(plugin_names, path);
     }
     if (errno != 0) {
-        goto err_str;
+        pm_on_error(dir_path, strerror(errno), PM_ERROR_OPENDIR);
     }
     closedir(dir);
-    return devices;
+}
 
-err_str:
-    cpy_error_string(error_string, strerror(errno));
-err:
-    if (devices != NULL) pm_plugins_free(devices);
-    if (dir != NULL) closedir(dir);    
-    return NULL;
+void pm_set_on_error(void (*on_error)(const char *, const char *, enum pm_error, void *), void *data) {
+    pm_on_error_ptr = on_error;
+    pm_on_error_data = data;
+}
+
+static void pm_free_all_names(List *plugin_names) {
+    size_t num_names, i;
+    num_names = list_num_elements(plugin_names);
+    for (i = 0; i < num_names; ++i) {
+        struct plugin_names *cur_name;
+        cur_name = list_get(plugin_names, i);
+        free(cur_name->name);
+        free(cur_name->path);
+    }
+    list_free(plugin_names);
+}
+
+List *pm_load_device_plugins(const char **dir_paths, size_t num_paths, const char *extension) {
+    List *plugin_names, *loaded_plugins;
+    size_t i;
+    plugin_names = list_new(sizeof(struct plugin_names), 4, 1.0, &util_list_allocator);
+    for (i = 0; i < num_paths; ++i) {
+        pm_collect_device_plugins_from_dir(dir_paths[i], extension, plugin_names);
+    }
+    if (list_num_elements(plugin_names) == 0) {
+        list_free(plugin_names);
+        return NULL;
+    }
+    loaded_plugins = pm_load_plugins(plugin_names);
+    if (list_num_elements(loaded_plugins) == 0) {
+        list_free(loaded_plugins);
+        loaded_plugins = NULL;
+    }
+    pm_free_all_names(plugin_names);
+    return loaded_plugins;
 }

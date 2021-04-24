@@ -95,15 +95,8 @@ static void impl_init_device_io(struct device_io *io, struct device_io_impl_data
 struct device_io *create_device_io_impl(int infd, int outfd) {
     struct device_io *io;
     struct device_io_impl_data *data;
-    io = malloc(sizeof(struct device_io));
-    if (io == NULL) {
-        return NULL;
-    }
-    data = malloc(sizeof(struct device_io_impl_data));
-    if (data == NULL) {
-        free(io);
-        return NULL;
-    }
+    io = safe_malloc(sizeof(struct device_io));
+    data = safe_malloc(sizeof(struct device_io_impl_data));
     data->infd = infd;
     data->outfd = outfd;
     impl_init_device_io(io, data);

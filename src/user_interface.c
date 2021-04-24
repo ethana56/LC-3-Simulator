@@ -135,7 +135,8 @@ static int ui_load_open_file(char *filename, FILE **program_file) {
     *program_file  = fopen(filename, "r");
     if (*program_file == NULL) {
         if (errno == ENOMEM) {
-            status = -1;
+            perror(NULL);
+            abort();
         }
         status = 0;
     }
@@ -406,16 +407,13 @@ static enum ui_status ui_step(struct ui *user_interface, List *input_tokens) {
     return step_status < 0 ? ERROR : CONTINUE;
 }
 
-static int tokenize_input(char *input, List *tokens) {
+static void tokenize_input(char *input, List *tokens) {
     char *context;
     char *token;
     while ((token = strtok_r(input, " ,\n", &context)) != NULL) {
-        if (list_add(tokens, &token) < 0) {
-            return -1;
-        }
+        list_add(tokens, &token);
         input = NULL;
     }
-    return 0;
 }
 
 static command_func get_command_func(char const *command) {
@@ -451,18 +449,13 @@ static enum ui_status execute_command(struct ui *user_interface, List *input_tok
 static int ui_loop(struct ui *user_interface) {
     char input[MAX_COMMAND_STR_SIZE + 1];
     List *input_tokens;
-    input_tokens = list_new(sizeof(char *), 5, 1);
-    if (input_tokens == NULL) {
-        return -1;
-    }
+    input_tokens = list_new(sizeof(char *), 5, 1, &util_list_allocator);
     for (;;) {
         enum ui_status status;
         if (get_user_input(input) < 0) {
             goto err;
         }
-        if (tokenize_input(input, input_tokens) < 0) {
-            goto err;
-        }
+        tokenize_input(input, input_tokens);
         status = execute_command(user_interface, input_tokens);
         if (status == DONE) {
             break;
@@ -480,13 +473,7 @@ err:
     return -1;    
 }
 
-static void err_exit(char *msg) {
-    write(STDERR_FILENO, msg, strlen(msg));
-    write(STDERR_FILENO, "\n", 1);
-    exit(EXIT_FAILURE);
-}
-
-static int attach_devices(struct ui *user_interface) {
+static void attach_devices(struct ui *user_interface) {
     List *devices;
     size_t i, num_devices;
     devices = user_interface->device_plugins;
@@ -495,57 +482,47 @@ static int attach_devices(struct ui *user_interface) {
         struct device_data *data;
         data = list_get(devices, i);
         if (simulator_attach_device(user_interface->simulator, data->device) < 0) {
-            if (errno == EINVAL) {
-                fprintf(stderr, "(device plugin path here) address map conficts with another\n");
-                continue;
-            }
-            return -1;
+            fprintf(stderr, "%s: address map conficts with another device\n", data->path);
+            continue;
         }
     }
-    return 0;
 }
 
+static void on_load_plugin_error(const char *path, const char *error_string, enum pm_error error_type, void *data) {
+    switch (error_type) {
+    case PM_ERROR_OPENDIR:
+        fprintf(stderr, "Error opening directiry %s: %s.\n", path, error_string);
+        break;
+    case PM_ERROR_PLUGIN_LOAD:
+        fprintf(stderr, "Error loading device plugin %s: %s.\n", path, error_string);
+        break;        
+    }
+}
 
-int start(char *executable_path) {
+void ui_free_plugins(List *device_plugins) {
+    size_t num_plugins, i;
+    num_plugins = list_num_elements(device_plugins);
+    for (i = 0; i < num_plugins; ++i) {
+        struct device_data *cur_plugin;
+        cur_plugin = list_get(device_plugins, i);
+        pm_free_plugin(cur_plugin);
+    }
+    list_free(device_plugins);
+}
+
+int start(void) {
     struct ui user_interface;
-    char load_devices_err_str[PM_ERROR_STR_SIZ];
-
-    user_interface.device_plugins = pm_load_device_plugins("../obj", EXTENSION, load_devices_err_str);
-    if (user_interface.device_plugins == NULL) {
-
-        err_exit(load_devices_err_str);
-    }
+    char const *plugin_dirs[] = {"../obj"};
+    pm_set_on_error(on_load_plugin_error, NULL);
+    user_interface.device_plugins = pm_load_device_plugins(plugin_dirs, 1, EXTENSION);
     user_interface.device_io_impl = create_device_io_impl(STDIN_FILENO, STDOUT_FILENO);
-    if (user_interface.device_io_impl == NULL) {
-        pm_plugins_free(user_interface.device_plugins);
-        err_exit(strerror(errno));
-    }
     user_interface.simulator = simulator_new(user_interface.device_io_impl);
-    if (user_interface.simulator == NULL) {
-        free_io_impl(user_interface.device_io_impl);
-        pm_plugins_free(user_interface.device_plugins);
-        err_exit(strerror(errno));
-    }
-    if (attach_devices(&user_interface) < 0) {
-        simulator_free(user_interface.simulator);
-        pm_plugins_free(user_interface.device_plugins);
-        free_io_impl(user_interface.device_io_impl);
-        err_exit(strerror(errno));
-    }
+    attach_devices(&user_interface);
     if (ui_loop(&user_interface) < 0) {
-        perror("ui loop");
-        exit(EXIT_FAILURE);
+        perror(NULL);
     }
     free_io_impl(user_interface.device_io_impl);
-    pm_plugins_free(user_interface.device_plugins);
+    ui_free_plugins(user_interface.device_plugins);
     simulator_free(user_interface.simulator);
     return 0;
 }
-
-
-
-
-
-
-
-

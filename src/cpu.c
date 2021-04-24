@@ -14,6 +14,7 @@
 
 #include "cpu.h"
 #include "lc3_reg.h"
+#include "util.h"
 
 #define ADD      0x1
 #define AND      0x5
@@ -345,10 +346,7 @@ void cpu_write_register(Cpu *cpu, enum lc3_reg reg, uint16_t value) {
 
 Cpu *new_Cpu(struct bus_accessor *bus_access) {
    Cpu *cpu;
-   cpu = malloc(sizeof(Cpu));
-   if (cpu == NULL) {
-      return NULL;
-   }
+   cpu = safe_malloc(sizeof(Cpu));
    cpu->bus_access = bus_access;
    setup_exceptions(cpu);
    if (!instructions_loaded) {

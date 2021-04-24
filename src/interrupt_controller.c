@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "interrupt_controller.h"
+#include "util.h"
 
 #define IMPOSSIBLE_PRIORITY 255
 
@@ -15,10 +16,7 @@ struct interrupt_controller {
 InterruptController *interrupt_controller_new(void) {
     InterruptController *inter_cont;
     int i;
-    inter_cont = malloc(sizeof(InterruptController));
-    if (inter_cont == NULL) {
-        return NULL;
-    }
+    inter_cont = safe_malloc(sizeof(InterruptController));
     for (i = 0; i < UINT8_MAX; ++i) {
         inter_cont->interrupts[i] = IMPOSSIBLE_PRIORITY;
     }

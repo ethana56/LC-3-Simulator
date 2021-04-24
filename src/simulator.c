@@ -12,6 +12,7 @@
 #include "device.h"
 #include "device_io.h"
 #include "lc3_reg.h"
+#include "util.h"
 
 struct simulator {
     struct bus_accessor bus_accessor;
@@ -148,30 +149,18 @@ int simulator_load_program(Simulator *simulator, int (*callback)(void *, uint16_
     return callback_result;
 }
 
-static int simulator_add_on_input_subscription(Simulator *simulator, struct device *device) {
+static void simulator_add_on_input_subscription(Simulator *simulator, struct device *device) {
     if (simulator->on_input_devices == NULL) {
-        simulator->on_input_devices = list_new(sizeof(struct device *), 2, 2.0);
-        if (simulator->on_input_devices == NULL) {
-            return -1;
-        }
+        simulator->on_input_devices = list_new(sizeof(struct device *), 2, 2.0, &util_list_allocator);
     }
-    if (list_add(simulator->on_input_devices, &device) < 0) {
-        return -1;
-    }
-    return 0;
+    list_add(simulator->on_input_devices, &device);
 }
 
-static int simulator_add_on_tick_subscription(Simulator *simulator, struct device *device) {
+static void simulator_add_on_tick_subscription(Simulator *simulator, struct device *device) {
     if (simulator->on_tick_devices == NULL) {
-        simulator->on_tick_devices = list_new(sizeof(struct device *), 1, 2.0);
-        if (simulator->on_tick_devices == NULL) {
-            return -1;
-        }
+        simulator->on_tick_devices = list_new(sizeof(struct device *), 1, 2.0, &util_list_allocator);
     }
-    if (list_add(simulator->on_tick_devices, &device) < 0) {
-        return -1;
-    }
-    return 0;
+    list_add(simulator->on_tick_devices, &device);
 }
 
 static void simulator_remove_on_input_subscription(Simulator *simulator, struct device *device) {
@@ -182,23 +171,13 @@ static void simulator_remove_on_input_subscription(Simulator *simulator, struct 
 
 }*/
 
-static int simulator_check_device_subscriptions(Simulator *simulator, struct device *device) {
+static void simulator_check_device_subscriptions(Simulator *simulator, struct device *device) {
     if (device->on_input != NULL) {
-        if (simulator_add_on_input_subscription(simulator, device) < 0) {
-            goto add_on_input_subscription_err;
-        }
+        simulator_add_on_input_subscription(simulator, device);
     }
     if (device->on_tick != NULL) {
-        if (simulator_add_on_tick_subscription(simulator, device) < 0) {
-            goto add_on_tick_subscription_err;
-        }
-    }
-    return 0;
-
-add_on_tick_subscription_err:
-    simulator_remove_on_input_subscription(simulator, device);
-add_on_input_subscription_err:
-    return -1;        
+        simulator_add_on_tick_subscription(simulator, device);
+    }      
 }
 
 int simulator_attach_device(Simulator *simulator, struct device *device) {
@@ -206,8 +185,7 @@ int simulator_attach_device(Simulator *simulator, struct device *device) {
         return -1;
     }
     device->start(device, &simulator->host);
-    device->start(device, &simulator->host);
-    return simulator_check_device_subscriptions(simulator, device);
+    simulator_check_device_subscriptions(simulator, device);
 }
 
 static void simulator_host_write_output(struct host *host, char output) {
@@ -230,37 +208,16 @@ static void init_host(Simulator *simulator) {
 
 Simulator *simulator_new(struct device_io *device_io) {
     Simulator *simulator;
-    simulator = malloc(sizeof(Simulator));
-    if (simulator == NULL) {
-        goto simulator_alloc_err;
-    }
+    simulator = safe_malloc(sizeof(Simulator));
     simulator->bus = bus_new();
-    if (simulator->bus == NULL) {
-        goto bus_alloc_err;
-    }
     simulator->inter_cont = interrupt_controller_new();
-    if (simulator->inter_cont == NULL) {
-        goto inter_cont_alloc_err;
-    }
     init_bus_accessor(simulator->bus, &simulator->bus_accessor);
     simulator->cpu = new_Cpu(&simulator->bus_accessor);
-    if (simulator->cpu == NULL) {
-        goto cpu_alloc_err;
-    }
     init_host(simulator);
     simulator->device_io = device_io;
     simulator->on_input_devices = NULL;
     simulator->on_tick_devices = NULL;
-    return simulator;
-
-cpu_alloc_err:
-    interrupt_controller_free(simulator->inter_cont);
-inter_cont_alloc_err:
-    bus_free(simulator->bus);
-bus_alloc_err:
-    free(simulator);
-simulator_alloc_err:
-    return NULL;            
+    return simulator;            
 }
 
 void simulator_free(Simulator *simulator) {

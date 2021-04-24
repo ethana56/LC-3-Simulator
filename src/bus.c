@@ -8,6 +8,7 @@
 #include "bus.h"
 #include "device.h"
 #include "list.h"
+#include "util.h"
 
 #define ATTACHMENT_SIZE_INIT       5
 #define ATTACHMENT_SIZE_MULTIPLIER 2
@@ -34,15 +35,8 @@ struct bus_impl {
 
 Bus *bus_new(void) {
     Bus *bus;
-    bus = malloc(sizeof(Bus));
-    if (bus == NULL) {
-        return NULL;
-    }
-    bus->attachments = list_new(sizeof(struct bus_attachment), ATTACHMENT_SIZE_INIT, ATTACHMENT_SIZE_MULTIPLIER);
-    if (bus->attachments == NULL) {
-        free(bus);
-        return NULL;
-    }
+    bus = safe_malloc(sizeof(Bus));
+    bus->attachments = list_new(sizeof(struct bus_attachment), ATTACHMENT_SIZE_INIT, ATTACHMENT_SIZE_MULTIPLIER, &util_list_allocator);
     memset(bus->memory, 0, sizeof(struct mem) * BUS_NUM_ADDRESSES);
     return bus;
 }
@@ -107,9 +101,7 @@ static int bus_add_attachment(Bus *bus, struct device *device, struct interval i
     }
     attachment.range = interval;
     attachment.device = device;
-    if (list_add(bus->attachments, &attachment) < 0) {
-        return -1;
-    }
+    list_add(bus->attachments, &attachment);
     list_sort(bus->attachments, attachment_comparator);
     for (i = interval.low; i <= interval.high; ++i) {
         bus->memory[i].attachment_flag = 1;
@@ -131,7 +123,6 @@ static int bus_add_attachment_seperate(Bus *bus, struct device *device) {
         interval.low = addresses[i];
         interval.high = addresses[i];
         if (bus_add_attachment(bus, device, interval) < 0) {
-            bus_remove_attachment(bus, device);
             return -1;
         }
     }
