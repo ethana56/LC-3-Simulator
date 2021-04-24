@@ -482,7 +482,7 @@ static void attach_devices(struct ui *user_interface) {
         struct device_data *data;
         data = list_get(devices, i);
         if (simulator_attach_device(user_interface->simulator, data->device) < 0) {
-            fprintf(stderr, "%s: address map conficts with another device\n", data->path);
+            fprintf(stderr, "%s: address map conficts with another device.\n", data->path);
             continue;
         }
     }

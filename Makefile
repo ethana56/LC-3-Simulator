@@ -13,13 +13,16 @@ DEVICES=$(patsubst $(PLUGINS)/%.c, $(OBJ_DIR)/%.dylib, $(PLUGIN_SRC))
 OBJ=$(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRC))
 
 CPPFLAGS=-MMD -MP
-CFLAGS=-Wall -g -fsanitize=undefined -fsanitize=address
+debug : CFLAGS=-Wall -g -fsanitize=undefined -fsanitize=address
+release : CFLAGS = -Wall -O2
 LDFLAGS=-ldl -g
 DYLIBFLAGS=-dynamiclib -I ./src
 
-.PHONY: all clean movedep
+.PHONY: all clean movedep release
 
-all: $(EXE) $(DEVICES)
+debug: $(EXE) $(DEVICES)
+
+release: $(EXE) $(DEVICES)
 
 $(EXE): $(OBJ) | $(BIN_DIR)
 	$(CC) $(OBJ) -o $@ $(CFLAGS) $(LDFLAGS)
