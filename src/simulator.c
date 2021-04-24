@@ -186,6 +186,7 @@ int simulator_attach_device(Simulator *simulator, struct device *device) {
     }
     device->start(device, &simulator->host);
     simulator_check_device_subscriptions(simulator, device);
+    return 0;
 }
 
 static void simulator_host_write_output(struct host *host, char output) {
