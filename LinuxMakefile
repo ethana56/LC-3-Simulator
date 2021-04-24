@@ -1,5 +1,5 @@
 .POSIX:
-CC=clang
+CC=gcc
 SRC_DIR=src
 OBJ_DIR=obj
 BIN_DIR=bin
@@ -41,4 +41,4 @@ clean:
 	@$(RM) -rv $(BIN_DIR) $(OBJ_DIR)
 
 -include $(OBJ:.o=.d)
--include $(DEVICES:.dylib=.d)
+-include $(DEVICES:.so=.d)

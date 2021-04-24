@@ -163,14 +163,6 @@ static void simulator_add_on_tick_subscription(Simulator *simulator, struct devi
     list_add(simulator->on_tick_devices, &device);
 }
 
-static void simulator_remove_on_input_subscription(Simulator *simulator, struct device *device) {
-
-}
-
-/*static void simulator_remove_on_tick_subscription(Simulator *simulator, struct device *device) {
-
-}*/
-
 static void simulator_check_device_subscriptions(Simulator *simulator, struct device *device) {
     if (device->on_input != NULL) {
         simulator_add_on_input_subscription(simulator, device);
