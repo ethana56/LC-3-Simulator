@@ -2,12 +2,10 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
-#include <limits.h>
 #include <unistd.h>
-#include <pthread.h>
+#include <limits.h>
 #include <sys/types.h>
 #include <arpa/inet.h>
-#include <dirent.h>
 
 #include "util.h"
 #include "plugin_manager.h"
@@ -491,7 +489,7 @@ static void attach_devices(struct ui *user_interface) {
 static void on_load_plugin_error(const char *path, const char *error_string, enum pm_error error_type, void *data) {
     switch (error_type) {
     case PM_ERROR_OPENDIR:
-        fprintf(stderr, "Error opening directiry %s: %s.\n", path, error_string);
+        fprintf(stderr, "Error opening plugin directiry %s: %s.\n", path, error_string);
         break;
     case PM_ERROR_PLUGIN_LOAD:
         fprintf(stderr, "Error loading device plugin %s: %s.\n", path, error_string);

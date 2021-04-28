@@ -14,11 +14,11 @@ OBJ=$(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRC))
 
 CPPFLAGS=-MMD -MP
 debug : CFLAGS=-Wall -g -fsanitize=undefined -fsanitize=address
-release : CFLAGS = -Wall -O2
+release : CFLAGS = -Wall -O2 
 LDFLAGS=-ldl -g
 DYLIBFLAGS=-dynamiclib -I ./src
 
-.PHONY: all clean movedep release
+.PHONY: debug clean release install
 
 debug: $(EXE) $(DEVICES)
 
@@ -38,6 +38,9 @@ $(BIN_DIR):
 
 $(OBJ_DIR):
 	mkdir -p $@	
+
+install:
+	mkdir -p ~/
 
 clean:
 	@$(RM) -rv $(BIN_DIR) $(OBJ_DIR)

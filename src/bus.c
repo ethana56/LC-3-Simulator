@@ -110,10 +110,6 @@ static int bus_add_attachment(Bus *bus, struct device *device, struct interval i
 
 }
 
-static void bus_remove_attachment(Bus *bus, struct device *device) {
-
-}
-
 static int bus_add_attachment_seperate(Bus *bus, struct device *device) {
     const uint16_t *addresses;
     size_t num_addresses, i;
