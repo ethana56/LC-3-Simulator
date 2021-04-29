@@ -65,11 +65,15 @@ static enum ui_status ui_quit(struct ui *, List *);
 
 /* static const char *os_filename = "os.obj"; */
 
-static const char *help_string = "help - print this message\nrun all = run entire program\n"
-                                  "read mem [address], [address] - display all mem between the two addresses\n"
-                                  "read mem [address] - read mem at address\n"
-                                  "write mem [address] - write mem at address\n"
-                                  "load [file] - load lc3 program";
+static const char *help_string = "help - print this message\n"
+                                  "mem read [address], (optional)[address] - display all mem between the two addresses\n"
+                                  "mem write [value] [address] (optional)[address] - write mem between the two address\n"
+                                  "reg read - display registers\n"
+                                  "reg write [value] [register] - write register\n"
+                                  "run - execute LC-3 program to the end\n"
+                                  "step [low] [high] - step LC-3 program between low and high\n"
+                                  "load [file] - load lc3 program\n"
+                                  "quit - close simulator\n";
 
 static const struct command commands[] = {{"step", ui_step}, {"help", ui_help}, {"run", ui_run}, {"mem", ui_mem}, {"reg", ui_reg}, {"load", ui_load}, {"quit", ui_quit}}; 
 static const int num_commands = 7;
