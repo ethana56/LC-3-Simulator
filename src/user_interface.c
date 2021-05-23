@@ -37,11 +37,13 @@
 
 #define UI_STEP_AMT_INDEX 1
 
+#define UI_INPUT_VALUE_INDEX 1
+
 #define UI_LOAD_FILENAME_INDEX 1
 
 struct ui {
     Simulator *simulator;
-    List *device_plugins;
+    PluginManager *device_plugins;
     struct device_io *device_io_impl;
 };
 
@@ -61,9 +63,12 @@ static enum ui_status ui_run(struct ui *, List *);
 static enum ui_status ui_mem(struct ui *, List *);
 static enum ui_status ui_reg(struct ui *, List *);
 static enum ui_status ui_load(struct ui *, List *);
+static enum ui_status ui_input(struct ui *, List *);
 static enum ui_status ui_quit(struct ui *, List *);
 
 /* static const char *os_filename = "os.obj"; */
+
+static const char *MAIN_PLUGIN_DIR_NAME = "/usr/local/lc3-simulator/plugins";
 
 static const char *help_string = "help - print this message\n"
                                   "mem read [address], (optional)[address] - display all mem between the two addresses\n"
@@ -73,10 +78,12 @@ static const char *help_string = "help - print this message\n"
                                   "run - execute LC-3 program to the end\n"
                                   "step [low] [high] - step LC-3 program between low and high\n"
                                   "load [file] - load lc3 program\n"
+                                  "input [16 bit value]\n"
                                   "quit - close simulator\n";
 
-static const struct command commands[] = {{"step", ui_step}, {"help", ui_help}, {"run", ui_run}, {"mem", ui_mem}, {"reg", ui_reg}, {"load", ui_load}, {"quit", ui_quit}}; 
-static const int num_commands = 7;
+static const struct command commands[] = {{"step", ui_step}, {"help", ui_help}, {"run", ui_run}, {"mem", ui_mem}, 
+                                        {"reg", ui_reg}, {"load", ui_load}, {"input", ui_input}, {"quit", ui_quit}}; 
+static const int num_commands = 8;
 
 static const char *REG_MEM_WRITE_MODE_STR = "write";
 static const char *REG_MEM_READ_MODE_STR  = "read";
@@ -288,8 +295,16 @@ static int ui_mem_get_mode(List *input_tokens, enum ui_reg_mem_mode *mode) {
            ui_reg_mem_convert_mode(mode_token, mode); 
 }
 
+static int ui_input_get_val(List *input_tokens, uint16_t *input) {
+    char *input_token;
+    if (!ui_get_token(input_tokens, UI_INPUT_VALUE_INDEX, &input_token) ||
+        strlen(input_token) != 1) return 0;
+    *input = *input_token;
+    return 1;
+}
+
 static void ui_mem_print_usage(void) {
-    printf("mem usage: mem [mode] [low address] [high address] [write val]\n");
+    printf("mem usage: mem [mode] [write val] [low address] [high address]\n");
 }
 
 static enum ui_status ui_mem(struct ui *user_interface, List *input_tokens) {
@@ -399,6 +414,20 @@ static int ui_step_get_amt(List *input_tokens, long long *amt) {
     return ui_convert_str_range(step_amt_token, amt, 0, LLONG_MAX);
 }
 
+static void ui_input_print_usage(void) {
+    printf("input usage: input [16 bit value]\n");
+}
+
+static enum ui_status ui_input(struct ui *user_interface, List *input_tokens) {
+    uint16_t input;
+    if (!ui_input_get_val(input_tokens, &input)) {
+        ui_input_print_usage();
+    } else {
+        simulator_update_devices_input(user_interface->simulator, input);
+    }
+    return CONTINUE;
+}
+
 static enum ui_status ui_step(struct ui *user_interface, List *input_tokens) {
     long long step_amt;
     int step_status;
@@ -406,6 +435,7 @@ static enum ui_status ui_step(struct ui *user_interface, List *input_tokens) {
         return CONTINUE;
     }   
     step_status = simulator_step(user_interface->simulator, step_amt);
+    ui_reg_print(user_interface);
     return step_status < 0 ? ERROR : CONTINUE;
 }
 
@@ -476,18 +506,16 @@ err:
 }
 
 static void attach_devices(struct ui *user_interface) {
-    List *devices;
-    size_t i, num_devices;
-    devices = user_interface->device_plugins;
-    num_devices = list_num_elements(devices);
-    for (i = 0; i < num_devices; ++i) {
-        struct device_data *data;
-        data = list_get(devices, i);
-        if (simulator_attach_device(user_interface->simulator, data->device) < 0) {
-            fprintf(stderr, "%s: address map conficts with another device.\n", data->path);
+    PluginManagerIterator *iterator;
+    struct pm_device_data device_data;
+    iterator = pm_get_iterator(user_interface->device_plugins);
+    while (pm_iterator_next(iterator, &device_data)) {
+        if (simulator_attach_device(user_interface->simulator, device_data.device) < 0) {
+            fprintf(stderr, "%s: address map conflicts with another device.\n", device_data.path);
             continue;
         }
     }
+    pm_iterator_free(iterator);
 }
 
 static void on_load_plugin_error(const char *path, const char *error_string, enum pm_error error_type, void *data) {
@@ -497,26 +525,36 @@ static void on_load_plugin_error(const char *path, const char *error_string, enu
         break;
     case PM_ERROR_PLUGIN_LOAD:
         fprintf(stderr, "Error loading device plugin %s: %s.\n", path, error_string);
-        break;        
+        break;
     }
 }
 
-void ui_free_plugins(List *device_plugins) {
-    size_t num_plugins, i;
-    num_plugins = list_num_elements(device_plugins);
-    for (i = 0; i < num_plugins; ++i) {
-        struct device_data *cur_plugin;
-        cur_plugin = list_get(device_plugins, i);
-        pm_free_plugin(cur_plugin);
-    }
-    list_free(device_plugins);
+/* Not thread safe or reentrant */
+List *get_plugin_dir_names(void) {
+    List *plugin_dir_names;
+    char *main_plugin_dir_name, *user_plugin_dir_name;
+    char *static_user_dir_name;
+    plugin_dir_names = list_new(sizeof(char *), 2, 1.0, &util_list_allocator);
+    main_plugin_dir_name = safe_malloc(sizeof(char) * (strlen(MAIN_PLUGIN_DIR_NAME) + 1));
+    strcpy(main_plugin_dir_name, MAIN_PLUGIN_DIR_NAME);
+    list_add(plugin_dir_names, &main_plugin_dir_name);
+    /*static_user_dir_name = getenv("HOME");
+    if (static_user_dir_name != NULL) {
+        user_plugin_dir_name = safe_malloc(sizeof(char) * (strlen(static_user_dir_name) + 1));
+        strcpy(user_plugin_dir_name, static_user_dir_name);
+        list_add(plugin_dir_names, &user_plugin_dir_name);
+    } else {
+        fprintf(stderr, "Can't find home directory. Not in PATH\n");
+    }*/
+    return plugin_dir_names;
 }
 
 int start(void) {
     struct ui user_interface;
-    char const *plugin_dirs[] = {"../obj"};
-    pm_set_on_error(on_load_plugin_error, NULL);
-    user_interface.device_plugins = pm_load_device_plugins(plugin_dirs, 1, EXTENSION);
+    List *plugin_dir_paths;
+    plugin_dir_paths = get_plugin_dir_names();
+    user_interface.device_plugins = pm_new(on_load_plugin_error, NULL);
+    pm_load_device_plugins(user_interface.device_plugins, plugin_dir_paths, EXTENSION);
     user_interface.device_io_impl = create_device_io_impl(STDIN_FILENO, STDOUT_FILENO);
     user_interface.simulator = simulator_new(user_interface.device_io_impl);
     attach_devices(&user_interface);
@@ -524,7 +562,7 @@ int start(void) {
         perror(NULL);
     }
     free_io_impl(user_interface.device_io_impl);
-    ui_free_plugins(user_interface.device_plugins);
     simulator_free(user_interface.simulator);
+    pm_free(user_interface.device_plugins);
     return 0;
 }

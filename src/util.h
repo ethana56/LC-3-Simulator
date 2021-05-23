@@ -12,6 +12,7 @@ void *safe_realloc(void *, size_t);
 size_t read_convert_16bits(uint16_t *, size_t, FILE *);
 int set_blocking(int fd);
 int set_nonblock(int fd);
+unsigned long string_hash(char *);
 size_t safe_strcat(char *dest, char *src, size_t dest_len);
 char *safe_strncpy(char *dst, char *src, size_t len);
 int safe_strcpy(char *, const char *, size_t, size_t);

@@ -1,8 +1,6 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#include <stdio.h>
-
 #include "device.h"
 
 #define KEYBOARD_INTERRUPT_VECTOR   0x80

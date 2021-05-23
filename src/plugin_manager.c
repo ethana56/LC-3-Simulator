@@ -8,26 +8,38 @@
 #include <sys/stat.h>
 #include <dlfcn.h>
 #include <libgen.h>
+#include <stdbool.h>
 
 #include "list.h"
 #include "plugin_manager.h"
 #include "simulator.h"
 #include "device.h"
 #include "util.h"
+#include "hashmap.h"
+#include "pm_name_manager.h"
 
-struct plugin_names {
-    char *path;
+struct plugin_manager {
+    HashMap *hashmap;
+    void (*on_error)(const char *, const char *, enum pm_error, void *);
+    void *on_error_data;
+};
+
+struct plugin_manager_entry {
+    void *dlhandle;
     char *name;
+    char *path;
+    struct device *device;
+};
+
+struct plugin_manager_iterator {
+    HashMapIterator *map_iterator;
 };
 
 static const char *func_null_error_string = "init_device_plugin is null";
 
-static void (*pm_on_error_ptr)(const char *path, const char *error_string, enum pm_error error_type, void *data) = NULL;
-static void *pm_on_error_data;
-
-static void pm_on_error(const char *path, const char *error_string, enum pm_error error_type) {
-    if (pm_on_error_ptr != NULL) {
-        pm_on_error_ptr(path, error_string, error_type, pm_on_error_data);
+static void pm_on_error(PluginManager *plugin_manager, const char *path, const char *error_string, enum pm_error error_type) {
+    if (plugin_manager->on_error != NULL) {
+        plugin_manager->on_error(path, error_string, error_type, plugin_manager->on_error_data);
     }
 }
 
@@ -54,111 +66,63 @@ static int check_extension(const char *path, const char *extension) {
     return strcmp(path_ext, extension) == 0;
 }
 
-static struct device *pm_init_plugin(void *dlhandle, const char *path) {
+static struct device *pm_init_plugin(PluginManager *plugin_manager, void *dlhandle, const char *path) {
     struct device *(*init_device_plugin)(void);
     struct device *plugin;
     char *dl_error_string;
     init_device_plugin = dlsym(dlhandle, "init_device_plugin");
     if (init_device_plugin == NULL) {
+        const char *final_error_string;
         dl_error_string = dlerror();
-        if (dl_error_string == NULL) {
-            pm_on_error(path, func_null_error_string, PM_ERROR_PLUGIN_LOAD);
-        } else {
-            pm_on_error(path, strerror(errno), PM_ERROR_PLUGIN_LOAD);
-        }
+        final_error_string = (dl_error_string == NULL ? func_null_error_string : dl_error_string);
+        pm_on_error(plugin_manager, path, final_error_string, PM_ERROR_PLUGIN_LOAD);
         return NULL;
     }
     plugin = init_device_plugin();
     if (plugin == NULL) {
-        pm_on_error(path, strerror(errno), PM_ERROR_PLUGIN_LOAD);
+        pm_on_error(plugin_manager, path, strerror(errno), PM_ERROR_PLUGIN_LOAD);
         return NULL;
     }
     return plugin;
 }
 
-/* does not free the object being pointed to */
-void pm_free_plugin(struct device_data *device_plugin) {
-    device_plugin->device->free(device_plugin->device);
-    free(device_plugin->name);
-    free(device_plugin->path);
-    dlclose(device_plugin->dlhandle);
-}
-
-static int pm_load_plugin(struct device_data *device_plugin) {
-    device_plugin->dlhandle = dlopen(device_plugin->path, RTLD_NOW);
-    if (device_plugin->dlhandle == NULL) {
-        pm_on_error(device_plugin->path, dlerror(), PM_ERROR_PLUGIN_LOAD);
+static int pm_load_plugin(PluginManager *plugin_manager, struct plugin_manager_entry *entry) {
+    entry->dlhandle = dlopen(entry->path, RTLD_NOW);
+    if (entry->dlhandle == NULL) {
+        pm_on_error(plugin_manager, entry->path, dlerror(), PM_ERROR_PLUGIN_LOAD);
         return -1;
     }
-    device_plugin->device = pm_init_plugin(device_plugin->dlhandle, device_plugin->path);
-    if (device_plugin->device == NULL) {
-        dlclose(device_plugin->dlhandle);
+    entry->device = pm_init_plugin(plugin_manager, entry->dlhandle, entry->path);
+    if (entry->device == NULL) {
+        dlclose(entry->dlhandle);
         return -1;
     }
     return 0;
 }
 
-static List *pm_load_plugins(List *plugin_names) {
-    size_t num_plugin_names, i;
-    List *device_plugins;
-    device_plugins = list_new(sizeof(struct device_data), 4, 1.0, &util_list_allocator);
-    num_plugin_names = list_num_elements(plugin_names);
-    for (i = 0; i < num_plugin_names; ++i) {
-        struct plugin_names *plugin_name;
-        struct device_data device_plugin;
-        plugin_name = list_get(plugin_names, i);
-        device_plugin.name = plugin_name->name;
-        device_plugin.path = plugin_name->path;
-        if (pm_load_plugin(&device_plugin) < 0) {
+static void pm_load_plugins(PluginManager *plugin_manager, 
+                                PMNameManagerIterator *plugin_names_iterator) 
+{
+    struct plugin_names *names;
+    while ((names = pmnm_iterator_next(plugin_names_iterator)) != NULL) {
+        struct plugin_manager_entry entry;
+        entry.name = names->name;
+        entry.path = names->path;
+        if (pm_load_plugin(plugin_manager, &entry) < 0) {
+            free(entry.name);
+            free(entry.path);
             continue;
         }
-        list_add(device_plugins, &device_plugin);
-        /* set name and path to null to prevent double free's when freeing the plugin */
-        plugin_name->name = NULL;
-        plugin_name->path = NULL;
-    }
-    return device_plugins;
-}
-
-static struct plugin_names *pm_check_names(List *plugin_names, const char *name) {
-    size_t num_plugin_names, i;
-    num_plugin_names = list_num_elements(plugin_names);
-    for (i = 0; i < num_plugin_names; ++i) {
-        struct plugin_names *cur_plugin_name;
-        cur_plugin_name = list_get(plugin_names, i);
-        if (strcmp(name, cur_plugin_name->name) == 0) {
-            return cur_plugin_name;
-        }
-    }
-    return NULL;
-}
-
-static void pm_collect_device_plugin_name(List *plugin_names, const char *path) {
-    struct plugin_names plugin_name;
-    struct plugin_names *existing_plugin_name;
-    size_t path_len;
-    char *base_name;
-    path_len = strlen(path);
-    base_name = get_basename(path, path_len);
-    plugin_name.path = safe_malloc(sizeof(char) * path_len + 1);
-    strcpy(plugin_name.path, path);
-    plugin_name.name = base_name;
-    existing_plugin_name = pm_check_names(plugin_names, base_name);
-    if (existing_plugin_name != NULL) {
-        free(existing_plugin_name->name);
-        free(existing_plugin_name->path);
-        *existing_plugin_name = plugin_name;
-    } else {
-        list_add(plugin_names, &plugin_name);
+        hashmap_set(plugin_manager->hashmap, &entry);
     }
 }
 
-static void pm_collect_device_plugins_from_dir(const char *dir_path, const char *extension, List *plugin_names) {
+static void pm_collect_device_plugins_from_dir(PluginManager *plugin_manager, const char *dir_path, const char *extension, PMNameManager *plugin_names) {
     DIR *dir;
     struct dirent *dp;
     dir = opendir(dir_path);
     if (dir == NULL) {
-        pm_on_error(dir_path, strerror(errno), PM_ERROR_OPENDIR);
+        pm_on_error(plugin_manager, dir_path, strerror(errno), PM_ERROR_OPENDIR);
         return;
     }
     errno = 0;
@@ -175,53 +139,120 @@ static void pm_collect_device_plugins_from_dir(const char *dir_path, const char 
             continue;
         }
         if (stat(path, &file_stat) < 0) {
-            pm_on_error(path, strerror(errno), PM_ERROR_PLUGIN_LOAD);
+            pm_on_error(plugin_manager, path, strerror(errno), PM_ERROR_PLUGIN_LOAD);
             continue;
         }
         if (S_ISDIR(file_stat.st_mode)) {
             continue;
         }
-        pm_collect_device_plugin_name(plugin_names, path);
+        pmnm_add_path(plugin_names, path);
     }
     if (errno != 0) {
-        pm_on_error(dir_path, strerror(errno), PM_ERROR_OPENDIR);
+        pm_on_error(plugin_manager, dir_path, strerror(errno), PM_ERROR_OPENDIR);
     }
     closedir(dir);
 }
 
-void pm_set_on_error(void (*on_error)(const char *, const char *, enum pm_error, void *), void *data) {
-    pm_on_error_ptr = on_error;
-    pm_on_error_data = data;
-}
-
-static void pm_free_all_names(List *plugin_names) {
-    size_t num_names, i;
-    num_names = list_num_elements(plugin_names);
-    for (i = 0; i < num_names; ++i) {
-        struct plugin_names *cur_name;
-        cur_name = list_get(plugin_names, i);
-        free(cur_name->name);
-        free(cur_name->path);
-    }
-    list_free(plugin_names);
-}
-
-List *pm_load_device_plugins(const char **dir_paths, size_t num_paths, const char *extension) {
-    List *plugin_names, *loaded_plugins;
-    size_t i;
-    plugin_names = list_new(sizeof(struct plugin_names), 4, 1.0, &util_list_allocator);
+static PMNameManager *pm_collect_device_plugin_names(PluginManager *plugin_manager, List *dir_paths, const char *extension) {
+    PMNameManager *plugin_names;
+    size_t num_paths, i;
+    plugin_names = pmnm_new();
+    num_paths = list_num_elements(dir_paths);
     for (i = 0; i < num_paths; ++i) {
-        pm_collect_device_plugins_from_dir(dir_paths[i], extension, plugin_names);
+        pm_collect_device_plugins_from_dir(plugin_manager, *(char **)list_get(dir_paths, i), 
+                                            extension, plugin_names);
     }
-    if (list_num_elements(plugin_names) == 0) {
-        list_free(plugin_names);
+    return plugin_names;
+}
+
+static unsigned long long pm_hash(void *key) {
+    struct plugin_manager_entry *entry;
+    entry = key;
+    return string_hash(entry->name);
+}
+
+static int pm_compare(void *one, void *two) {
+    struct plugin_manager_entry *entry_one, *entry_two;
+    entry_one = one;
+    entry_two = two;
+    return strcmp(entry_one->name, entry_two->name);
+}
+
+static void pm_free_key(void *key) {
+    struct plugin_manager_entry *entry;
+    entry = key;
+    free(entry->name);
+    free(entry->path);
+    entry->device->free(entry->device);
+    dlclose(entry->dlhandle);
+}
+
+static HashMap *pm_build_plugins_hashmap(void) {
+    size_t sizes[] = {11, 23};
+    struct hashmap_config config = {
+        .allocator = {
+            .alloc = safe_malloc,
+            .free = free
+        },
+        .get_hash = pm_hash,
+        .compare = pm_compare,
+        .free_key = pm_free_key,
+        .element_size = sizeof(struct plugin_manager_entry),
+        .load_factor = .75,
+        .sizes = sizes,
+        .num_sizes = 2,
+        .copy_elements = true,
+    };
+    return hashmap_new(&config);
+}
+
+PluginManager *pm_new(void (*on_error)(const char *, const char *, enum pm_error, void *), void *data) {
+    PluginManager *plugin_manager;
+    plugin_manager = safe_malloc(sizeof(PluginManager));
+    plugin_manager->hashmap = pm_build_plugins_hashmap();
+    plugin_manager->on_error = on_error;
+    plugin_manager->on_error_data = data;
+    return plugin_manager;
+}
+
+void pm_free(PluginManager *plugin_manager) {
+    hashmap_free(plugin_manager->hashmap);
+    free(plugin_manager);
+}
+
+void pm_load_device_plugins(PluginManager *plugin_manager, List *dir_paths, const char *extension) {
+    PMNameManager *plugin_names;
+    PMNameManagerIterator *plugin_names_iterator;
+    plugin_names = pm_collect_device_plugin_names(plugin_manager, dir_paths, extension);
+    plugin_names_iterator = pmnm_to_iterator(plugin_names);
+    pm_load_plugins(plugin_manager, plugin_names_iterator);
+    pmnm_iterator_free(plugin_names_iterator);
+}
+
+PluginManagerIterator *pm_get_iterator(PluginManager *plugin_manager) {
+    PluginManagerIterator *iterator;
+    iterator = safe_malloc(sizeof(PluginManagerIterator));
+    iterator->map_iterator = hashmap_get_iterator(plugin_manager->hashmap);
+    return iterator;
+}
+
+void pm_remove_plugin(PluginManager *plugin_manager, char *name) {
+    hashmap_remove(plugin_manager->hashmap, name);
+}
+
+struct pm_device_data *pm_iterator_next(PluginManagerIterator *iterator, struct pm_device_data *device_data) {
+    struct plugin_manager_entry *entry;
+    entry = hashmap_iterator_next(iterator->map_iterator);
+    if (entry == NULL) {
         return NULL;
     }
-    loaded_plugins = pm_load_plugins(plugin_names);
-    if (list_num_elements(loaded_plugins) == 0) {
-        list_free(loaded_plugins);
-        loaded_plugins = NULL;
-    }
-    pm_free_all_names(plugin_names);
-    return loaded_plugins;
+    device_data->name = entry->name;
+    device_data->path = entry->path;
+    device_data->device = entry->device;
+    return device_data;
+}
+
+void pm_iterator_free(PluginManagerIterator *iterator) {
+    hashmap_iterator_free(iterator->map_iterator);
+    free(iterator);
 }

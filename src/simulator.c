@@ -39,7 +39,7 @@ static void init_bus_accessor(Bus *bus, struct bus_accessor *bus_access) {
     bus_access->write = simulator_bus_write;
 }
 
-static void simulator_update_devices_input(Simulator *simulator, char input) {
+void simulator_update_devices_input(Simulator *simulator, uint16_t input) {
     size_t i, num_on_input_devices;
     List *on_input_devices;
     on_input_devices = simulator->on_input_devices;

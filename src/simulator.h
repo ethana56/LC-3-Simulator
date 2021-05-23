@@ -20,6 +20,7 @@ enum simulator_address_status {OUT_OF_BOUNDS, DEVICE_REGISTER, VALUE};
 struct simulator;
 typedef struct simulator Simulator;
 
+void simulator_update_devices_input(Simulator *, uint16_t);
 enum simulator_address_status simulator_read_address(Simulator *, uint16_t, uint16_t *);
 uint16_t simulator_read_register(Simulator *, enum lc3_reg);
 void simulator_write_register(Simulator *, enum lc3_reg, uint16_t);
