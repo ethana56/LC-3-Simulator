@@ -105,6 +105,7 @@ static void pm_load_plugins(PluginManager *plugin_manager,
 {
     struct plugin_names *names;
     while ((names = pmnm_iterator_next(plugin_names_iterator)) != NULL) {
+        printf("names: name: %s, path: %s\n", names->name, names->path);
         struct plugin_manager_entry entry;
         entry.name = names->name;
         entry.path = names->path;

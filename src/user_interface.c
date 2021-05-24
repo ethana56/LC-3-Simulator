@@ -66,10 +66,6 @@ static enum ui_status ui_load(struct ui *, List *);
 static enum ui_status ui_input(struct ui *, List *);
 static enum ui_status ui_quit(struct ui *, List *);
 
-/* static const char *os_filename = "os.obj"; */
-
-static const char *MAIN_PLUGIN_DIR_NAME = "/usr/local/lc3-simulator/plugins";
-
 static const char *help_string = "help - print this message\n"
                                   "mem read [address], (optional)[address] - display all mem between the two addresses\n"
                                   "mem write [value] [address] (optional)[address] - write mem between the two address\n"
@@ -532,20 +528,25 @@ static void on_load_plugin_error(const char *path, const char *error_string, enu
 /* Not thread safe or reentrant */
 List *get_plugin_dir_names(void) {
     List *plugin_dir_names;
-    char *main_plugin_dir_name, *user_plugin_dir_name;
-    char *static_user_dir_name;
+    static const char *install_dir = "/usr/local";
+    static const char *plugins_dir = "/lc3-simulator/plugins";
+    const char *home_dir;
+    char *main_plugins_dir_path, *home_plugin_dir_path;
     plugin_dir_names = list_new(sizeof(char *), 2, 1.0, &util_list_allocator);
-    main_plugin_dir_name = safe_malloc(sizeof(char) * (strlen(MAIN_PLUGIN_DIR_NAME) + 1));
-    strcpy(main_plugin_dir_name, MAIN_PLUGIN_DIR_NAME);
-    list_add(plugin_dir_names, &main_plugin_dir_name);
-    /*static_user_dir_name = getenv("HOME");
-    if (static_user_dir_name != NULL) {
-        user_plugin_dir_name = safe_malloc(sizeof(char) * (strlen(static_user_dir_name) + 1));
-        strcpy(user_plugin_dir_name, static_user_dir_name);
-        list_add(plugin_dir_names, &user_plugin_dir_name);
-    } else {
-        fprintf(stderr, "Can't find home directory. Not in PATH\n");
-    }*/
+    main_plugins_dir_path = safe_malloc(sizeof(char) * 
+                            (strlen(install_dir) + strlen(plugins_dir) + 1));
+    strcpy(main_plugins_dir_path, install_dir);
+    strcat(main_plugins_dir_path, plugins_dir);
+    list_add(plugin_dir_names, &main_plugins_dir_path);
+    home_dir = getenv("HOME");
+    if (home_dir == NULL) {
+        fprintf(stderr, "Can't find home directory, Not in PATH\n");
+        return plugin_dir_names;
+    }
+    home_plugin_dir_path = safe_malloc(sizeof(char) * (strlen(home_dir) + strlen(plugins_dir) + 1));
+    strcpy(home_plugin_dir_path, home_dir);
+    strcat(home_plugin_dir_path, plugins_dir);
+    list_add(plugin_dir_names, &home_plugin_dir_path);
     return plugin_dir_names;
 }
 

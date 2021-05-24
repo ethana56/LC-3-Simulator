@@ -21,6 +21,7 @@ static const size_t NUM_SIZES = 2;
 static unsigned long long hash(void *key) {
     struct plugin_names *names;
     names = key;
+    printf("name: %s, hash: %lu\n", names->name, string_hash(names->name));
     return string_hash(names->name);
 }
 
@@ -32,6 +33,7 @@ static int hash_compare(void *key_one, void *key_two) {
 }
 
 static void free_key(void *key) {
+    printf("Free key: %s\n", ((struct plugin_names *)key)->name);
     /* Intentionally left blank */
 }
 
@@ -69,6 +71,7 @@ void pmnm_add_path(PMNameManager *name_manager, const char *path) {
     names.path = safe_malloc((sizeof(char) * path_len) + 1);
     strcpy(names.path, path);
     names.name = get_basename(path, path_len);
+    printf("names.name: %s\n", names.name);
     hashmap_set(name_manager->hashmap, &names);
 }
 
