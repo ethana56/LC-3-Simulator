@@ -16,7 +16,6 @@
 #include "device.h"
 #include "util.h"
 #include "hashmap.h"
-#include "pm_name_manager.h"
 
 struct plugin_manager {
     HashMap *hashmap;
@@ -86,7 +85,7 @@ static struct device *pm_init_plugin(PluginManager *plugin_manager, void *dlhand
     return plugin;
 }
 
-static int pm_load_plugin(PluginManager *plugin_manager, struct plugin_manager_entry *entry) {
+static int pm_load_plugin_lib(PluginManager *plugin_manager, struct plugin_manager_entry *entry) {
     entry->dlhandle = dlopen(entry->path, RTLD_NOW);
     if (entry->dlhandle == NULL) {
         pm_on_error(plugin_manager, entry->path, dlerror(), PM_ERROR_PLUGIN_LOAD);
@@ -100,25 +99,25 @@ static int pm_load_plugin(PluginManager *plugin_manager, struct plugin_manager_e
     return 0;
 }
 
-static void pm_load_plugins(PluginManager *plugin_manager, 
-                                PMNameManagerIterator *plugin_names_iterator) 
-{
-    struct plugin_names *names;
-    while ((names = pmnm_iterator_next(plugin_names_iterator)) != NULL) {
-        printf("names: name: %s, path: %s\n", names->name, names->path);
-        struct plugin_manager_entry entry;
-        entry.name = names->name;
-        entry.path = names->path;
-        if (pm_load_plugin(plugin_manager, &entry) < 0) {
-            free(entry.name);
-            free(entry.path);
-            continue;
-        }
-        hashmap_set(plugin_manager->hashmap, &entry);
+static void pm_load_plugin(PluginManager *plugin_manager, const char *path) {
+    struct plugin_manager_entry entry;
+    size_t path_len;
+    path_len = strlen(path);
+    entry.name = get_basename(path, path_len);
+    if (hashmap_get(plugin_manager->hashmap, &entry) != NULL) {
+        return;
     }
+    entry.path = safe_malloc(path_len + 1);
+    strcpy(entry.path, path);
+    if (pm_load_plugin_lib(plugin_manager, &entry) < 0) {
+        free(entry.name);
+        free(entry.path);
+        return;
+    }
+    hashmap_set(plugin_manager->hashmap, &entry);
 }
 
-static void pm_collect_device_plugins_from_dir(PluginManager *plugin_manager, const char *dir_path, const char *extension, PMNameManager *plugin_names) {
+static void pm_load_device_plugins_from_dir(PluginManager *plugin_manager, const char *dir_path, const char *extension) {
     DIR *dir;
     struct dirent *dp;
     dir = opendir(dir_path);
@@ -146,24 +145,12 @@ static void pm_collect_device_plugins_from_dir(PluginManager *plugin_manager, co
         if (S_ISDIR(file_stat.st_mode)) {
             continue;
         }
-        pmnm_add_path(plugin_names, path);
+        pm_load_plugin(plugin_manager, path);
     }
     if (errno != 0) {
         pm_on_error(plugin_manager, dir_path, strerror(errno), PM_ERROR_OPENDIR);
     }
     closedir(dir);
-}
-
-static PMNameManager *pm_collect_device_plugin_names(PluginManager *plugin_manager, List *dir_paths, const char *extension) {
-    PMNameManager *plugin_names;
-    size_t num_paths, i;
-    plugin_names = pmnm_new();
-    num_paths = list_num_elements(dir_paths);
-    for (i = 0; i < num_paths; ++i) {
-        pm_collect_device_plugins_from_dir(plugin_manager, *(char **)list_get(dir_paths, i), 
-                                            extension, plugin_names);
-    }
-    return plugin_names;
 }
 
 static unsigned long long pm_hash(void *key) {
@@ -222,12 +209,11 @@ void pm_free(PluginManager *plugin_manager) {
 }
 
 void pm_load_device_plugins(PluginManager *plugin_manager, List *dir_paths, const char *extension) {
-    PMNameManager *plugin_names;
-    PMNameManagerIterator *plugin_names_iterator;
-    plugin_names = pm_collect_device_plugin_names(plugin_manager, dir_paths, extension);
-    plugin_names_iterator = pmnm_to_iterator(plugin_names);
-    pm_load_plugins(plugin_manager, plugin_names_iterator);
-    pmnm_iterator_free(plugin_names_iterator);
+    size_t num_paths, i;
+    num_paths = list_num_elements(dir_paths);
+    for (i = num_paths; i != 0; --i) {
+        pm_load_device_plugins_from_dir(plugin_manager, *(char **)list_get(dir_paths, i - 1), extension);
+    }
 }
 
 PluginManagerIterator *pm_get_iterator(PluginManager *plugin_manager) {

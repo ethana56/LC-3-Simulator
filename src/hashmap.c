@@ -93,27 +93,22 @@ static struct bucket_node *hashmap_bucket_node_create(struct hashmap_allocator *
 }
 
 static int hashmap_add_key_to_bucket(HashMap *hashmap, void *key, struct bucket_node **bucket, unsigned long long hash) {
-    struct bucket_node *cur_node, *new_node;
-    cur_node = *bucket;
-    while (cur_node != NULL && cur_node->next != NULL) {
-        if (hashmap->compare(cur_node->key, key) == 0) {
-            hashmap->free_key(cur_node->key);
+    struct bucket_node **cur_node;
+    cur_node = bucket;
+    while (*cur_node != NULL) {
+        if (hashmap->compare((*cur_node)->key, key) == 0) {
+            hashmap->free_key((*cur_node)->key);
             if (hashmap->copy_elements) {
-                hashmap->allocator.free(cur_node->key);
+                hashmap->allocator.free((*cur_node)->key);
             }
-            cur_node->key = key;
+            (*cur_node)->key = key;
             return 0;
         }
-        cur_node = cur_node->next;
+        cur_node = &((*cur_node)->next);
     }
-    new_node = hashmap_bucket_node_create(&hashmap->allocator, key, hash);
-    if (new_node == NULL) {
+    *cur_node = hashmap_bucket_node_create(&hashmap->allocator, key, hash);
+    if (*cur_node == NULL) {
         return -1;
-    }
-    if (cur_node == NULL) {
-        *bucket = new_node;
-    } else {
-        cur_node->next = new_node;
     }
     ++hashmap->num_elements;
     return 0;
@@ -408,5 +403,3 @@ void *hashmap_to_list(HashMap *hashmap, size_t *num_elements) {
     hashmap_free_internal(hashmap, false);
     return array;
 }
-
-
